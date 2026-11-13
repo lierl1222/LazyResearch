@@ -16,43 +16,38 @@ export function ResearchMark() {
   </svg>
 }
 
-// Static, original silver ribbons sit below three blurred container surfaces.
+// Broad folds share one light direction. A small feather softens only the silhouettes.
 export function OrganicBackground() {
-  return <div className="organic-background" aria-hidden="true"><svg viewBox="0 0 1600 1100" preserveAspectRatio="xMidYMid slice">
-    <defs>
-      <linearGradient id="silver" x1="0" x2="1" y1="0" y2=".8"><stop stopColor="#fff"/><stop offset=".24" stopColor="#c4cbc6"/><stop offset=".43" stopColor="#fdfefd"/><stop offset=".53" stopColor="#aeb8b1"/><stop offset=".65" stopColor="#fff"/><stop offset=".86" stopColor="#d0d6d1"/><stop offset="1" stopColor="#fafbf9"/></linearGradient>
-      <linearGradient id="edge" x1="0" x2="1"><stop stopColor="#fff"/><stop offset=".5" stopColor="#b5beb6"/><stop offset="1" stopColor="#fff"/></linearGradient>
-      <linearGradient id="fold-metal" gradientUnits="userSpaceOnUse" x1="585" y1="310" x2="755" y2="590">
-        <stop stopColor="#e5e9e8" />
-        <stop offset=".22" stopColor="#fbfcfb" />
-        <stop offset=".37" stopColor="#cbd2d2" />
-        <stop offset=".53" stopColor="#889699" />
-        <stop offset=".62" stopColor="#e2e7e6" />
-        <stop offset=".72" stopColor="#ffffff" />
-        <stop offset="1" stopColor="#abb7b8" />
-      </linearGradient>
-      <linearGradient id="fold-return" gradientUnits="userSpaceOnUse" x1="850" y1="440" x2="1230" y2="735">
-        <stop stopColor="#fbfcfb" />
-        <stop offset=".32" stopColor="#adb8b8" />
-        <stop offset=".49" stopColor="#8a999c" />
-        <stop offset=".63" stopColor="#e9edec" />
-        <stop offset=".76" stopColor="#fff" />
-        <stop offset="1" stopColor="#c0c9c8" />
-      </linearGradient>
-    </defs>
-    <g fill="none" strokeLinecap="round">
-      <path d="M-200 950C140 910 125 610 400 620S640 950 930 830 1100 100 1800 160" stroke="url(#silver)" strokeWidth="125" opacity=".65"/>
-      <path d="M-200 910C140 870 125 570 400 580S640 910 930 790 1100 60 1800 120" stroke="url(#edge)" strokeWidth="2" opacity=".8"/>
-      <path d="M500-180C270 110 650 270 1000 150S1210 350 1700 450" stroke="url(#silver)" strokeWidth="90" opacity=".5"/>
-      <path d="M500-150C270 140 650 300 1000 180S1210 380 1700 480" stroke="white" strokeWidth="2" opacity=".9"/>
-      <path d="M-100 330C220 100 560 360 510 640S840 1120 1350 1040" stroke="url(#edge)" strokeWidth="3" opacity=".38"/>
-    </g>
-    {/* Two faces of one folded ribbon cross behind the task, workflow and metrics panels. */}
-    <g>
-      <path fill="url(#fold-metal)" d="M-120 430 C185 638 332 602 555 436 C739 298 850 270 987 377 C844 322 761 402 616 525 C355 747 92 759 -120 612 Z" />
-      <path fill="url(#fold-return)" d="M987 377 C1083 418 1094 609 1246 642 C1371 668 1510 587 1700 438 L1700 610 C1518 765 1354 825 1190 712 C1035 604 1057 424 987 377 Z" />
-      <path fill="none" stroke="#ffffffde" strokeWidth="2.2" d="M-120 430 C185 638 332 602 555 436 C739 298 850 270 987 377 C1083 418 1094 609 1246 642 C1371 668 1510 587 1700 438" />
-      <path fill="none" stroke="#6d7e821f" strokeWidth="3" d="M-120 612 C92 759 355 747 616 525 C761 402 844 322 987 377" />
-    </g>
-  </svg></div>
+  return <div className="organic-background" aria-hidden="true">
+    <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="satin-front" x1="0" y1="0" x2=".36" y2="1">
+          <stop stopColor="#f8f5ef" />
+          <stop offset=".25" stopColor="#efeeea" />
+          <stop offset=".48" stopColor="#d4d7d7" />
+          <stop offset=".65" stopColor="#c3cacb" />
+          <stop offset=".84" stopColor="#e4e5e2" />
+          <stop offset="1" stopColor="#f4f1ea" />
+        </linearGradient>
+        <linearGradient id="satin-reverse" x1=".1" y1="0" x2=".74" y2="1">
+          <stop stopColor="#e2e3e0" />
+          <stop offset=".32" stopColor="#f7f4ee" />
+          <stop offset=".62" stopColor="#dcdfde" />
+          <stop offset=".83" stopColor="#c8cece" />
+          <stop offset="1" stopColor="#e7e8e4" />
+        </linearGradient>
+        <filter id="satin-contour" x="-10%" y="-10%" width="120%" height="120%">
+          <feGaussianBlur stdDeviation="4" />
+        </filter>
+      </defs>
+      <g filter="url(#satin-contour)">
+        <path fill="url(#satin-reverse)" opacity=".69"
+          d="M-180 775 C180 706 404 1026 802 797 S1315 248 1740 232 L1740 382 C1316 415 1212 780 847 913 S162 827 -180 940 Z" />
+        <path fill="url(#satin-front)"
+          d="M-160 355 C110 603 390 625 652 308 S1136 133 1322 302 S1565 407 1760 285 L1760 499 C1522 630 1336 450 1177 322 S886 191 704 438 S251 845 -160 562 Z" />
+        <path fill="url(#satin-reverse)" opacity=".64"
+          d="M-130 365 C155 655 428 629 670 316 S1111 161 1276 287 C1074 126 918 109 669 353 S295 762 -130 458 Z" />
+      </g>
+    </svg>
+  </div>
 }
