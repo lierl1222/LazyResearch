@@ -9,12 +9,14 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .configuration import load_model_config
 from .models import ResearchTask
 from .runner import Runner
 
 
 def create_app(root: Path | None = None, *, runner: Runner | None = None) -> FastAPI:
-    runner = runner or Runner(root or Path(os.environ.get("LAZYRESEARCH_DIR", ".lazyresearch")))
+    runner = runner or load_model_config().runner(
+        root or Path(os.environ.get("LAZYRESEARCH_DIR", ".lazyresearch")))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -28,7 +30,7 @@ def create_app(root: Path | None = None, *, runner: Runner | None = None) -> Fas
 
     @app.get("/config")
     def config():
-        return {"adapters": list(runner.adapters), "mode": runner.mode}
+        return {"adapters": list(runner.adapters), "mode": runner.mode, "models": runner.model_status}
 
     @app.post("/runs", status_code=202)
     def start(task: ResearchTask):

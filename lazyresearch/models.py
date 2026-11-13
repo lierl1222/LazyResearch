@@ -1,6 +1,7 @@
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from typing import Annotated
 
 
 class Record(BaseModel):
@@ -31,6 +32,14 @@ class Evidence(Record):
 class Plan(Record):
     summary: str
     needs_help: bool = False
+    steps: list[str] = Field(default_factory=list)
+
+
+class ModelPlan(Record):
+    summary: str = Field(min_length=1, max_length=500)
+    steps: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]] = Field(
+        min_length=1, max_length=6,
+    )
 
 
 class Candidate(Record):

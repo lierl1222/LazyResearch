@@ -29,6 +29,7 @@ class State(TypedDict, total=False):
     deadline: float
     task: dict
     plan: dict
+    plan_source: str
     evidence: list[dict]
     round: int
     queue: list[dict]
@@ -66,11 +67,12 @@ def within_deadline(operation, deadline: float):
 
 class Workflow:
     def __init__(self, adapter: ResearchAdapter, storage: Storage,
-                 prompts: Prompts, gateway: ModelGateway | None):
+                 prompts: Prompts, gateway: ModelGateway | None, local_gateway: ModelGateway | None = None):
         self.adapter = adapter
         self.storage = storage
         self.prompts = prompts
         self.gateway = gateway
+        self.local_gateway = local_gateway
 
     def compile(self, checkpointer):
         branch = StateGraph(Branch, output_schema=BranchOutput)
@@ -109,12 +111,32 @@ class Workflow:
         task = ResearchTask.model_validate(state["task"])
         if time.time() >= state["deadline"]:
             return {"stop_reason": "time_budget"}
+        if self.gateway and self.prompts.planning.strip():
+            name = "cloud-planning"
+            context = {
+                "operation": "research_plan",
+                "goal": task.goal,
+                "tools": sorted(self.adapter.tools),
+                "resource_count": len(task.resources),
+                "limits": {"rounds": task.budget.rounds, "tools": task.budget.tools,
+                           "seconds": task.budget.seconds},
+            }
+            record = self.storage.get(state["run_id"], name)
+            if record is None:
+                record = self.request_cloud(state, "planning", name, self.prompts.planning,
+                                            context, task.budget)
+            if record and record.get("plan"):
+                plan = Plan.model_validate(record["plan"])
+                self.emit(state, "plan", **plan.model_dump(), source="cloud")
+                return {"plan": plan.model_dump(), "plan_source": "cloud"}
+            if record:
+                self.emit(state, "cloud_skipped", role="planning", reason="plan_unavailable")
         try:
             plan = within_deadline(lambda _: self.adapter.plan(task), state["deadline"])
         except TimeoutError:
             return {"stop_reason": "time_budget"}
-        self.emit(state, "plan", summary=plan.summary)
-        return {"plan": plan.model_dump()}
+        self.emit(state, "plan", **plan.model_dump(), source="adapter")
+        return {"plan": plan.model_dump(), "plan_source": "adapter"}
 
     def collect(self, state: State) -> dict:
         task = ResearchTask.model_validate(state["task"])
@@ -159,10 +181,11 @@ class Workflow:
         if not options:
             return {"queue": [], "stop_reason": "no_candidates"}
         round_number = state.get("round", 0) + 1
-        if round_number == 1 and state["plan"]["needs_help"]:
-            options = self.model_choice(state, "planning", options, round_number)
-        if revision and (state["stalled"] >= 2 or state["validation"]["recoverable_unknown"]):
+        if (revision and not self.prompts.planning.strip()
+                and (state["stalled"] >= 2 or state["validation"]["recoverable_unknown"])):
             options = self.model_choice(state, "diagnosis", options, round_number)
+        if self.local_gateway and self.prompts.local.strip() and len(options) > 1:
+            options = self.local_order(state, options, round_number)
         if time.time() >= state["deadline"]:
             return {"queue": [], "stop_reason": "time_budget"}
         self.emit({**state, "round": round_number}, "hypothesis", candidates=options)
@@ -177,52 +200,93 @@ class Workflow:
         budget = ResearchTask.model_validate(state["task"]).budget
         name = f"cloud-{role}-{round_number}"
         previous = self.storage.get(state["run_id"], name)
-        context = {
+        context = self.decision_context(state, options)
+        if previous is None:
+            previous = self.request_cloud(state, role, name, prompt, context, budget)
+        offered = {item["id"] for item in context["actions"]}
+        action = previous["action_id"] if previous else None
+        return [item for item in options if item["id"] == action] if action in offered else options
+
+    @staticmethod
+    def decision_context(state: State, options: list[dict]) -> dict:
+        return {
             "goal": state["task"]["goal"],
+            "plan": state.get("plan", {}),
             "evidence": [{"id": item["id"], "summary": item["summary"][:500]}
                          for item in state["evidence"][-6:]],
             "recent_result": state.get("validation", {}).get("summary", "")[:500],
             "actions": [{"id": item["id"], "hypothesis": item["hypothesis"][:500]}
                         for item in options[:6]],
         }
-        if previous is None:
-            ledger = self.cloud_ledger(state["run_id"])
-            try:
-                reserve = within_deadline(lambda _: self.gateway.reserve(prompt, context), state["deadline"])
-            except Exception:
-                self.emit(state, "cloud_skipped", role=role, reason="estimate_unavailable")
-                return options
-            if (reserve <= 0 or ledger["cloud_requests"] >= budget.cloud_requests
-                    or ledger["tokens"] + ledger["tokens_pending"] + reserve > budget.tokens
-                    or self.limit(state)):
-                self.emit(state, "cloud_skipped", role=role, reason="budget")
-                return options
-            previous = {"reserved": reserve, "usage": None, "action_id": None}
-            self.storage.put(state["run_id"], name, previous)
-            self.emit(state, "cloud_reserved", role=role, **self.cloud_ledger(state["run_id"]))
-            try:
-                decision = within_deadline(
-                    lambda timeout: Decision.model_validate(self.gateway.decide(
-                        prompt, context, timeout, f'{state["run_id"]}:{name}')),
-                    state["deadline"],
-                )
-                previous.update(decision.model_dump())
-                self.storage.put(state["run_id"], name, previous)
-            except Exception as error:
-                self.emit(state, "cloud_failed", role=role, reason=type(error).__name__)
-            self.emit(state, "cloud_accounted", role=role, **self.cloud_ledger(state["run_id"]))
-        offered = {item["id"] for item in context["actions"]}
-        action = previous["action_id"]
-        return [item for item in options if item["id"] == action] if action in offered else options
+    def request_cloud(self, state, role, name, prompt, context, budget):
+        run_id = state["run_id"]
+        ledger = self.cloud_ledger(run_id)
+        if ledger["cloud_requests"] >= budget.cloud_requests or self.limit(state):
+            self.emit(state, "cloud_skipped", role=role, reason="budget")
+            return None
+        try:
+            reserve = within_deadline(lambda _: self.gateway.reserve(prompt, context), state["deadline"])
+        except Exception:
+            self.emit(state, "cloud_skipped", role=role, reason="estimate_unavailable")
+            return None
+        if reserve <= 0 or ledger["tokens"] + ledger["tokens_pending"] + reserve > budget.tokens:
+            self.emit(state, "cloud_skipped", role=role, reason="budget")
+            return None
+        record = {"reserved": reserve, "usage": None, "action_id": None}
+        self.storage.put(run_id, name, record)
+        self.emit(state, "cloud_reserved", role=role, **self.cloud_ledger(run_id))
+        self.call_model(state, self.gateway, name, prompt, context, record, "cloud", role=role)
+        self.emit(state, "cloud_accounted", role=role, **self.cloud_ledger(run_id))
+        return record
+
+    def local_order(self, state: State, options: list[dict], round_number: int) -> list[dict]:
+        run_id = state["run_id"]
+        name = f"local-model-{round_number}"
+        record = self.storage.get(run_id, name)
+        context = self.decision_context(state, options)
+        if record is None and not self.limit(state):
+            record = {"action_id": None, "usage": None}
+            self.storage.put(run_id, name, record)
+            self.call_model(state, self.local_gateway, name, self.prompts.local, context, record, "local")
+            self.emit(state, "local_accounted", **self.local_ledger(run_id))
+        action = record["action_id"] if record else None
+        if action not in {item["id"] for item in context["actions"]}:
+            return options
+        # Keep dependency barriers and preserve the original order of other candidates.
+        for index, item in enumerate(options):
+            if item["id"] == action and all(candidate["independent"] for candidate in options[:index + 1]):
+                self.emit({**state, "round": round_number}, "local_choice", candidate_id=action)
+                return [item, *options[:index], *options[index + 1:]]
+        return options
+
+    def call_model(self, state, gateway, name, prompt, context, record, channel, **details):
+        run_id = state["run_id"]
+        try:
+            decision = within_deadline(
+                lambda timeout: Decision.model_validate(gateway.decide(
+                    prompt, context, timeout, f"{run_id}:{name}")),
+                state["deadline"],
+            )
+            record.update(decision.model_dump())
+            self.storage.put(run_id, name, record)
+        except Exception as error:
+            self.emit(state, f"{channel}_failed", reason=type(error).__name__, **details)
 
     def cloud_ledger(self, run_id: str) -> dict:
-        with self.storage.connect() as db:
-            rows = db.execute("SELECT body FROM records WHERE run_id=? AND name LIKE 'cloud-%'",
-                              (run_id,)).fetchall()
-        records = [json.loads(row[0]) for row in rows]
+        records = self.model_records(run_id, "cloud-%")
         return {"cloud_requests": len(records),
                 "tokens": sum(item["usage"] or 0 for item in records),
                 "tokens_pending": sum(item["reserved"] for item in records if item["usage"] is None)}
+
+    def local_ledger(self, run_id: str) -> dict:
+        records = self.model_records(run_id, "local-model-%")
+        return {"local_requests": len(records), "local_tokens": sum(item["usage"] or 0 for item in records)}
+
+    def model_records(self, run_id: str, pattern: str) -> list[dict]:
+        with self.storage.connect() as db:
+            rows = db.execute("SELECT body FROM records WHERE run_id=? AND name LIKE ?",
+                              (run_id, pattern)).fetchall()
+        return [json.loads(row[0]) for row in rows]
 
     def reserve(self, state: State) -> dict:
         budget = ResearchTask.model_validate(state["task"]).budget

@@ -1,0 +1,24 @@
+# Copy to models.toml. Set enabled = true after filling the endpoint and model.
+[local]
+enabled = false
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen2.5:1.5b"
+timeout_seconds = 15
+max_output_tokens = 128
+output_limit_field = "max_tokens"
+
+[cloud]
+enabled = false
+base_url = ""
+model = ""
+api_key = ""
+api_key_env = "LAZYRESEARCH_CLOUD_API_KEY"
+timeout_seconds = 20
+max_output_tokens = 256
+output_limit_field = "max_completion_tokens"
+input_overhead_tokens = 256
+
+[prompts]
+local = ""
+planning = ""
+diagnosis = ""

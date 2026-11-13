@@ -2,8 +2,8 @@ import argparse
 import json
 from pathlib import Path
 
+from .configuration import load_model_config
 from .models import ResearchTask
-from .runner import Runner
 
 
 def main() -> int:
@@ -14,8 +14,9 @@ def main() -> int:
     source.add_argument("--resume")
     parser.add_argument("--state-dir", type=Path, default=Path(".lazyresearch"))
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--model-config", type=Path)
     args = parser.parse_args()
-    runner = Runner(args.state_dir)
+    runner = load_model_config(args.model_config).runner(args.state_dir)
     if args.resume:
         run_id = args.resume
     else:
