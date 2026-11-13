@@ -1,5 +1,6 @@
 import asyncio
 import json
+import mimetypes
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -85,5 +86,7 @@ def create_app(root: Path | None = None, *, runner: Runner | None = None) -> Fas
 
     frontend = Path(__file__).resolve().parents[1] / "web" / "dist"
     if frontend.is_dir():
+        # Windows registry settings can otherwise cause browsers to reject JS modules.
+        mimetypes.add_type("text/javascript", ".js")
         app.mount("/", StaticFiles(directory=frontend, html=True), name="workbench")
     return app

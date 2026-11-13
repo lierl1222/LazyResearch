@@ -36,3 +36,15 @@ npm --prefix web run build
 ## 编排参考
 
 参考 [agentic-rag-for-dummies @ c1b339b](https://github.com/GiovanniPasq/agentic-rag-for-dummies/tree/c1b339b54f0927bd0b469fcce70f3cd5de4e918d/project/rag_agent) 的主图和子图分工、条件边与 `Send` 聚合。参考源码通过独立的稀疏检出对照。LazyResearch 用结构化证据连接阶段，并使用本地报告节点在预算耗尽时收尾。
+
+
+## 有机毛玻璃工作台
+
+打开首页直接进入研究工作台。在左侧输入目标、选择适配器并编辑预算，点击「启动研究」执行真实 API。带 `?run=<id>` 的链接支持刷新回放。中央提供按轮次折叠的流程记录与原始执行详情，右侧显示真实资源用量和研究包下载入口。
+
+- `web/src/glass.css`：颜色、玻璃透明度、模糊、阴影、无模糊降级及低动态样式。
+- `web/src/style.css`：布局、字体和响应式。
+- `web/src/components/Glass.jsx`：GlassCard / GlassInput / GlassButton 与原创银色 SVG 背景。
+- `web/src/components/ResearchProgress.jsx`：真实轮次状态、修正反馈弧线、资源指标及零预算处理。
+
+前端修改后运行 `npm --prefix web run build`，再使用上面的 Uvicorn 命令预览。项目未配置独立 lint 或 TypeScript 类型检查脚本。默认研究适配器仍为确定性测试适配器。

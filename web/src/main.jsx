@@ -1,6 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import './style.css'
+import './glass.css'
+import { GlassCard, GlassInput, GlassButton, OrganicBackground } from './components/Glass'
+import { ResearchProgress, ResourceMetric } from './components/ResearchProgress'
 
 const phases = [
   ['plan', '规划'], ['evidence', '收集证据'], ['hypothesis', '提出假设'],
@@ -58,7 +61,8 @@ function EventDetails({ event }) {
 function App() {
   const [config, setConfig] = useState(null)
   const [runId, setRunId] = useState(() => new URLSearchParams(location.search).get('run'))
-  const [goal, setGoal] = useState('验证研究流程能否依据首轮结果自动修正')
+  const [goal, setGoal] = useState('')
+  const submissionLock = useRef(false)
   const [resources, setResources] = useState('')
   const [adapter, setAdapter] = useState('fixture')
   const [budget, setBudget] = useState(initial)
@@ -121,6 +125,8 @@ function App() {
 
   async function start(event) {
     event.preventDefault()
+    if (submissionLock.current || !goal.trim()) return
+    submissionLock.current = true
     setBusy(true)
     setError('')
     try {
@@ -138,76 +144,65 @@ function App() {
       setError(err.message)
     } finally {
       setBusy(false)
+      submissionLock.current = false
     }
   }
 
   const terminal = ['finished', 'failed'].includes(snapshot?.status)
-  const lastPhase = events.findLast(item => phases.some(([key]) => key === item.stage))?.stage
   const accounting = events.findLast(event => event.cloud_requests !== undefined) || {}
   const toolUse = events.findLast(event => event.tools !== undefined)?.tools ?? snapshot?.tools ?? 0
   const status = snapshot?.stop_reason ? (reasons[snapshot.stop_reason] || snapshot.stop_reason)
     : runId ? (connected ? '研究运行中' : '正在重连') : '等待启动'
   const activeBudget = snapshot?.task.budget || budget
 
-  return <>
+  const failed = snapshot?.status === 'failed'
+  const statusTone = failed ? 'failure' : snapshot?.stop_reason === 'validated' ? 'success' : terminal || events.at(-1)?.stage === 'revision' ? 'warning' : runId ? 'active' : 'idle'
+  return <div className="dashboard">
+    <OrganicBackground />
     <header>
-      <div className="brand"><span className="mark" aria-hidden="true">↗</span>LazyResearch</div>
-      <span className="mode"><i />{config?.mode === 'gateway_ready' ? '云网关可用' : '本地执行模式'}</span>
+      <div className="page-heading"><h1>研究工作台</h1><span className="mode"><i />{config?.mode === 'gateway_ready' ? '云网关可用' : '本地执行模式'}</span></div>
+      {runId && <code className="run-id" title={runId}>Session {runId.slice(0, 10).toUpperCase()}</code>}
     </header>
     <main>
-      <div className="title">
-        <div><h1>研究工作台</h1><p>查看假设、实验结果与每轮修正依据。</p></div>
-        {runId && <code className="run-id" title={runId}>{runId.slice(0, 10)}</code>}
-      </div>
       <div className="layout">
-        <aside className="panel">
+        <GlassCard as="aside" className="task-panel">
           <h2>研究任务</h2>
           <form onSubmit={start}>
-            <label>研究目标<textarea required maxLength={2000} rows={3} value={goal} onChange={e => setGoal(e.target.value)} /></label>
-            <label>执行适配器<select value={adapter} onChange={e => setAdapter(e.target.value)}>
+            <label>研究目标<GlassInput as="textarea" placeholder="输入需要研究或验证的问题" required maxLength={2000} rows={3} value={goal} onChange={e => setGoal(e.target.value)} /></label>
+            <label>执行适配器<GlassInput as="select" value={adapter} onChange={e => setAdapter(e.target.value)}>
               {(config?.adapters || ['fixture']).map(id => <option key={id} value={id}>{id === 'fixture' ? '确定性测试适配器' : id}</option>)}
-            </select></label>
-            <label>输入资源 <span className="optional">可选</span><textarea rows={2} placeholder="每行一个资源引用" value={resources} onChange={e => setResources(e.target.value)} /></label>
-            <fieldset><legend>运行预算</legend><div className="limits">
+            </GlassInput></label>
+            <label>输入资源 <span className="optional">可选</span><GlassInput as="textarea" rows={2} placeholder="每行一个资源引用" value={resources} onChange={e => setResources(e.target.value)} /></label>
+            <details className="budget-settings"><summary>运行预算</summary><fieldset aria-label="运行预算"><div className="limits">
               {limits.map(([key, name, , min, max]) => <label key={key}>{name}
-                <input required type="number" min={min} max={max} value={budget[key]}
+                <GlassInput required type="number" min={min} max={max} value={budget[key]}
                   onChange={e => setBudget({...budget, [key]: e.target.value === '' ? '' : Number(e.target.value)})} />
               </label>)}
-            </div></fieldset>
-            <button disabled={busy || !config || (!!runId && !terminal && !error)}>{busy ? '正在启动…' : '启动研究'} <span aria-hidden="true">→</span></button>
+            </div></fieldset></details>
+            <GlassButton disabled={busy || !config || (!!runId && !terminal && !error)}>{busy ? '正在启动…' : '启动研究'} <span aria-hidden="true">→</span></GlassButton>
             {error && <p className="negative" role="alert">{error}</p>}
           </form>
-        </aside>
-        <section className="panel workspace" aria-labelledby="progress">
-          <div className="section-head"><h2 id="progress">研究进度</h2><span role="status" className="status">{status}</span></div>
-          <ol className="phases" aria-label="研究阶段">
-            {phases.map(([key, label]) => <li key={key} className={key === lastPhase ? 'current' : ''}>
-              {label}
-            </li>)}
-          </ol>
+        </GlassCard>
+        <GlassCard as="section" className="workspace" aria-labelledby="progress">
+          <div className="section-head"><h2 id="progress">研究进度</h2><span role="status" className={`status ${statusTone}`}>{failed ? '执行失败' : status}</span></div>
+          {snapshot?.task.goal && <p className="run-goal">{snapshot.task.goal}</p>}
           {snapshot?.error && <p className="negative" role="alert">{snapshot.error}</p>}
-          {events.length ? <div className="timeline">
-            {[...events].reverse().map(event => <article key={event.id}>
-              <div className="event-head"><h3>{stageLabels[event.stage] || event.stage}</h3>
-                {event.round > 0 && <span>第 {event.round} 轮</span>}</div>
-              <EventDetails event={event} />
-            </article>)}
-          </div> : <div className="empty"><span aria-hidden="true">↳</span><p>运行事件将在这里显示</p></div>}
-        </section>
-        <aside className="panel metrics">
+          <ResearchProgress key={runId || 'draft'} events={events} terminal={terminal} failed={failed} phases={phases} labels={stageLabels} EventDetails={EventDetails} />
+        </GlassCard>
+        <GlassCard as="aside" className="metrics">
           <h2>资源用量</h2>
-          <dl>
-            <div><dt>运行时间</dt><dd>{seconds.toFixed(2)} <small>/ {activeBudget.seconds} 秒</small></dd></div>
-            <div><dt>工具调用</dt><dd>{toolUse} <small>/ {activeBudget.tools}</small></dd></div>
-            <div><dt>云请求</dt><dd>{accounting.cloud_requests ?? snapshot?.cloud_requests ?? 0} <small>/ {activeBudget.cloud_requests}</small></dd></div>
-            <div><dt>已确认 token</dt><dd>{accounting.tokens ?? snapshot?.tokens ?? 0} <small>/ {activeBudget.tokens}</small></dd></div>
-            <div><dt>待确认 token</dt><dd>{accounting.tokens_pending ?? snapshot?.tokens_pending ?? 0}</dd></div>
+          <dl className="resource-list">
+            <ResourceMetric label="运行时间" value={Number(seconds || 0).toFixed(2)} limit={activeBudget.seconds} unit="秒" />
+            <ResourceMetric label="工具调用" value={toolUse} limit={activeBudget.tools} />
+            <ResourceMetric label="云请求" value={accounting.cloud_requests ?? snapshot?.cloud_requests ?? 0} limit={activeBudget.cloud_requests} />
+            <ResourceMetric label="已确认 token" value={accounting.tokens ?? snapshot?.tokens ?? 0} limit={activeBudget.tokens} />
+            <ResourceMetric label="待确认 token" value={accounting.tokens_pending ?? snapshot?.tokens_pending ?? 0} />
           </dl>
-          {terminal && <a className="download" href={`/runs/${encodeURIComponent(runId)}/artifacts`}>下载研究包 <span aria-hidden="true">↓</span></a>}
-        </aside>
+          {terminal && <GlassButton as="a" className="download" href={`/runs/${encodeURIComponent(runId)}/artifacts`}>下载研究包 <span aria-hidden="true">↓</span></GlassButton>}
+        </GlassCard>
       </div>
     </main>
-  </>
+  </div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)
