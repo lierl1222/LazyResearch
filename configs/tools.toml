@@ -90,7 +90,7 @@ function = "tabular"
 [tools.register_tool]
 material = "any_task"
 label = "编写并验证研究工具"
-purpose = "Create a task-local pure JavaScript function expression (one object input, JSON result). Supply name custom_..., purpose including input keys, example and expected. After registration invoke it by name. No host APIs."
+purpose = "Create a task-local pure JavaScript function expression (one object input, JSON result). Supply name custom_..., purpose including input keys, example and expected. After registration invoke it by name. No host APIs (no require/import/fs/process); built-ins only (Math/JSON/String/Array)."
 module = "generated"
 schema = "Definition"
 function = "register"

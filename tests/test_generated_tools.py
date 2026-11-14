@@ -257,6 +257,41 @@ def test_sample_only_registration_is_not_cited_as_evidence(tmp_path):
     assert "custom_double" in result["summary"]
 
 
+def test_register_tool_rejects_host_apis_and_is_never_blocked(tmp_path):
+    class Gateway:
+        config = ModelConfig(local={"enabled":True,"base_url":"http://test","model":"fixture"})
+
+        def ask(self, role, id, instruction, context, schema):
+            if schema.__name__ == 'EvidenceReview':
+                return schema(summary='环境不支持 require', limitations='需纯函数', next_step='改用纯 JS 重写', action='revise')
+            if schema.__name__ == "CapabilityPlan":
+                return schema(objective="numeric function",tools=[])
+            if schema.__name__ == "Direction":
+                return schema(action="delegate", objective_or_conclusion="register and verify")
+            if "0-0-" in id:
+                return schema(action="experiment", tool="register_tool",
+                              arguments={"name":"custom_double","purpose":"double n","example":{"n":2},"expected":4,
+                                         "source":"x => require('os') || x.n*2"},
+                              hypothesis_or_finding="register", prediction_or_limitation="node style")
+            if "0-1-" in id:
+                return schema(action="experiment", tool="register_tool",
+                              arguments={"name":"custom_double","purpose":"double n","example":{"n":2},"expected":4,
+                                         "source":"x=>x.n*2"},
+                              hypothesis_or_finding="register v2", prediction_or_limitation="pure function")
+            if "0-2-" in id:
+                return schema(action="experiment", tool="custom_double", arguments={"inputs":{"n":11}},
+                              hypothesis_or_finding="verify", prediction_or_limitation="real input")
+            return schema(action="return", hypothesis_or_finding="done", prediction_or_limitation="verified")
+    registry = Registry(tmp_path)
+    task = Task(goal="Double n",domain="math",max_worker_turns=4,max_delegations=1)
+    result = research(task,task.model_dump(),registry,Gateway(),BudgetGovernor(registry,task.budget))
+    observations = result["evidence"]
+    assert "宿主 API" in observations["worker-0-0"]["error"]
+    assert observations["worker-0-1"]["registered"] == "custom_double"
+    assert observations["worker-0-2"]["registration"] == "verified"
+    assert registry.get("generated_tools","custom_double")["source"] == "x=>x.n*2"
+
+
 def test_reregistering_a_verified_tool_is_rejected(tmp_path):
     class Gateway:
         config = ModelConfig(local={"enabled":True,"base_url":"http://test","model":"fixture"})

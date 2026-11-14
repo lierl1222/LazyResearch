@@ -150,6 +150,7 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                "previous_research": previous_research}
     initial_catalog = {name: catalog[name] for name, tool in enabled.items() if tool.prefer_first} or catalog
     seen = set()
+    signature_observations = {}
     unavailable = set()
     tool_streaks = {}
     refuted_streaks = {}
@@ -352,6 +353,8 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                                   "or return a finding with its limitations. "
                                   "每次行动前先读 reviews 中最新一条 next_step 建议并据此行动。"
                                   "当现有工具都无法完成该目标时，必须用 register_tool 编写新的自定义工具，而不是反复重试不匹配的旧工具。"
+                                  "register_tool 的 source 必须是纯 JavaScript 函数：沙箱禁止 require/import/fs/process 等宿主 API，"
+                                  "只能使用 Math/JSON/String/Array 等内置对象，所需数据通过 inputs 参数传入。"
                                   "注册新工具分两步：register_tool 只对提交的 example 做样例校验，通过后工具进入「待验证」状态，不会正式注册。"
                                   "样例通过后必须立即用真实研究输入调用该 custom_ 工具（arguments 固定为 {\"inputs\": {...}}，不得复用 example），"
                                   "只有真实调用成功返回有界 JSON 后才会正式注册。"
@@ -371,7 +374,7 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                         available["register_tool"] = catalog["register_tool"]
                 failure_counts = {}
                 for tool_name, count in tool_streaks.items():
-                    if count >= 2:
+                    if count >= 2 and tool_name != "register_tool":
                         failure_counts[tool_name] = count
                 blocked = set(failure_counts)
                 if error_streak >= 3:
@@ -421,14 +424,19 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                     if worker.tool in blocked:
                         raise ValueError(f"工具 {worker.tool} 在本轮已连续失败两次，请换用其他工具或 return 汇报限制。")
                     if tool is None or worker.tool not in available:
-                        raise ValueError("当前材料不支持所选工具")
+                        names = "、".join(sorted(available)) or "无"
+                        raise ValueError(f"当前材料不支持所选工具 {worker.tool}；可用工具：{names}。"
+                                         "若要使用自定义工具，请先用 register_tool 注册并通过真实调用验证。")
                     args = tool.resolve()[0].model_validate(worker.arguments).model_dump()
                     if (worker.tool in pending
                             and args.get("inputs") == pending[worker.tool]["definition"]["example"]):
                         raise ValueError("验证输入不能与注册样例相同，请使用真实研究输入。")
                     signature = tool_signature(worker.tool, args)
                     if signature in seen:
-                        raise ValueError("相同工具和参数已经尝试，请更换工具、用 register_tool 编写新工具，或汇报")
+                        previous = signature_observations.get(signature)
+                        hint = f"（此前结果见观测 {previous}）" if previous else ""
+                        raise ValueError(f"相同工具和参数已经尝试{hint}，请更换工具或参数、"
+                                         "用 register_tool 编写新工具，或汇报")
                     seen.add(signature)
                     emit("execution", summary=worker.tool, tool_label=tool_label, arguments=args,
                          observation_id=id, round=turn + 1)
@@ -437,6 +445,7 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                     outcome = execute_isolated(registry, budget, id, execute_tool,
                                {**extra, "tool": worker.tool, "tool_spec": tool.model_dump(by_alias=True),
                                 "arguments": args, "task": material})
+                    signature_observations[signature] = id
                     if worker.tool == "register_tool" and outcome.get("registered") == args["name"]:
                         if args["name"] in generated:
                             outcome = {"error": f"工具名 {args['name']} 已正式注册并通过真实调用验证；"
