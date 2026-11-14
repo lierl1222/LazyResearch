@@ -339,7 +339,9 @@ def favorita_technical_report(registry, report):
 
 
 def generic_result_markdown(registry, report):
-    lines = ["# 研究结果", "", "运行状态：" + STATUSES.get(report["status"], report["status"]), ""]
+    lines = ["# 研究报告", ""]
+    if report.get("status") != "reported":
+        lines += ["状态：" + STATUSES.get(report["status"], report["status"]), ""]
     benchmark = registry.root / "benchmark.json"
     if benchmark.exists():
         data = json.loads(benchmark.read_text(encoding="utf8"))
@@ -378,5 +380,5 @@ def generic_result_markdown(registry, report):
         else:
             summary = chinese_text(summary, STATUSES[report["status"]] + "，详见上方实验记录。")
         summary = display_references(summary, {ref: display["title"] for ref, display in displays.items()})
-        lines += ["", "## 运行说明", "", summary]
+        lines += ["", "## 结论", "", summary]
     return "\n".join(lines).rstrip() + "\n"
