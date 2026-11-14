@@ -13,12 +13,12 @@ function inline(text){
 }
 function Markdown({text}) {
   const blocks=[];let table=null
-  const flushTable=()=>{if(table){const head=table[0].every(c=>/^:?-+:?$/.test(c))?1:0
-    blocks.push(<table key={blocks.length}><tbody>{table.slice(head).map((row,r)=><tr key={r}>{row.map((cell,c)=><td key={c}>{inline(cell)}</td>)}</tr>)}</tbody></table>);table=null}}
+  const flushTable=()=>{if(table){blocks.push(<table key={blocks.length}><tbody>{table.map((row,r)=><tr key={r}>{row.map((cell,c)=><td key={c}>{inline(cell)}</td>)}</tr>)}</tbody></table>);table=null}}
   for(const line of text.replace(/^#[^\n]*\n/,'').split('\n')){
     const trimmed=line.trim()
     if(!trimmed){flushTable();continue}
-    if(/^\|.*\|$/.test(trimmed)){(table||(table=[])).push(trimmed.split('|').slice(1,-1).map(s=>s.trim()));continue}
+    if(/^\|.*\|$/.test(trimmed)){const cells=trimmed.split('|').slice(1,-1).map(s=>s.trim())
+      if(!cells.every(c=>/^:?-+:?$/.test(c)))(table||(table=[])).push(cells);continue}
     flushTable()
     if(trimmed.startsWith('## '))blocks.push(<h4 key={blocks.length}>{inline(trimmed.slice(3))}</h4>)
     else if(trimmed.startsWith('### '))blocks.push(<h5 key={blocks.length}>{inline(trimmed.slice(4))}</h5>)
