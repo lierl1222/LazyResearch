@@ -12,6 +12,7 @@ from pydantic import Field, model_validator
 
 from .session import workflow
 from .research import Task, research, append_report
+from .final_report import finalize_result
 from .presentation import present_events
 from .results import result_markdown
 from .science.budget import BudgetGovernor
@@ -186,7 +187,11 @@ class ResearchService:
             entry["goal"] = entry["goal"][:600]
             entry["summary"] = entry["summary"][:800]
             entry["evidence"] = [
-                {"id": key, "observation": json.dumps(value, ensure_ascii=False)[:480]}
+                {"id": key, "observation": json.dumps(
+                    {k: v for k, v in value.items()
+                     if k not in {"config_hash", "data_hash", "cpu_seconds", "elapsed_seconds",
+                                  "wall_seconds", "run_id", "experiment_id", "baseline_ns", "candidate_ns"}},
+                    ensure_ascii=False)[:480]}
                 for key, value in list(entry["evidence"].items())[-5:]
             ]
         return history
@@ -211,16 +216,22 @@ class ResearchService:
             registry.put("state", {"status": "running"})
             self.emit(registry, "running", status="running")
             budget = BudgetGovernor(registry, task.budget)
+            gateway = self.gateway_factory(self.config, registry, budget, allow_reporting=True)
             try:
-                report = research(task, material, registry,
-                    self.gateway_factory(self.config, registry, budget, allow_reporting=True), budget,
+                report = research(task, material, registry, gateway, budget,
                     lambda stage, **details: self.emit(registry, stage, **details),
                     previous_research=self.recent_research(registry), memory=self.memory(registry))
             except Exception as error:
                 report = {"status": "failed", "summary": type(error).__name__, "evidence": {},
                           "delegations": [], "budget": budget.snapshot()}
+            try:
+                finalize_result(registry, report, gateway, budget,
+                                memory=self.memory(registry), previous_research=self.recent_research(registry),
+                                emit=lambda stage, **details: self.emit(registry, stage, **details))
+            except Exception:
+                result_markdown(registry, report, save=True)
+            report["budget"] = budget.snapshot()
             registry.put("report", report)
-            result_markdown(registry, report, save=True)
             registry.put("state", {"status": report["status"]})
             self.emit(registry, "finished", status=report["status"], summary=report["summary"])
 

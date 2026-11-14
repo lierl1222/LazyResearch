@@ -37,7 +37,7 @@ class ScienceGateway:
         self.transport = transport
         self.allow_reporting = allow_reporting
 
-    def ask(self, role, id, instruction, context, schema):
+    def ask(self, role, id, instruction, context, schema, *, output_tokens=None):
         cached = self.registry.get("model_calls", id)
         if cached:
             if cached.get("decision"):
@@ -50,7 +50,7 @@ class ScienceGateway:
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False, separators=(",", ":"))}]
         # UTF-8 bytes + protocol allowance is a conservative reservation for byte-level tokenizers.
         input_bound = len(json.dumps(messages, ensure_ascii=False).encode()) + endpoint.input_overhead_tokens
-        output_bound = endpoint.max_output_tokens
+        output_bound = endpoint.max_output_tokens if output_tokens is None else output_tokens
         priced = endpoint.input_price_per_million is not None and endpoint.output_price_per_million is not None
         def cost(inputs, outputs):
             if role == "local":
@@ -163,3 +163,89 @@ class ScienceGateway:
         if decision is None:
             raise RuntimeError(record["error"])
         return decision
+
+    def ask_text(self, role, id, instruction, context, *, output_tokens=None):
+        """Plain-text completion without JSON wrapping or schema validation (final report synthesis).
+        Returns (text, truncated); truncated marks a provider-side length cutoff."""
+        cached = self.registry.get("model_calls", id)
+        if cached:
+            if cached.get("text") is not None:
+                return cached["text"], cached.get("truncated", False)
+            raise RuntimeError(cached.get("error", "Uncertain model call is not retried"))
+        endpoint = self.config.cloud if role == "cloud" else self.config.local
+        if not endpoint.enabled or not endpoint.base_url or not endpoint.model:
+            raise RuntimeError(f"{role} endpoint is not configured")
+        messages = [{"role": "system", "content": instruction},
+                    {"role": "user", "content": json.dumps(context, ensure_ascii=False, separators=(",", ":"))}]
+        input_bound = len(json.dumps(messages, ensure_ascii=False).encode()) + endpoint.input_overhead_tokens
+        output_bound = endpoint.max_output_tokens if output_tokens is None else output_tokens
+        priced = endpoint.input_price_per_million is not None and endpoint.output_price_per_million is not None
+        def cost(inputs, outputs):
+            if role == "local":
+                return 0
+            if priced and type(inputs) is int and type(outputs) is int and inputs >= 0 and outputs >= 0:
+                return (inputs * endpoint.input_price_per_million + outputs * endpoint.output_price_per_million) / 1_000_000
+            return None
+        reserved_cost = cost(input_bound, output_bound)
+        self.budget.reserve_llm(id, input_bound, output_bound, cost_usd=reserved_cost,
+                                allow_reporting=self.allow_reporting, role=role)
+        self.registry.put("model_calls", {"id": id, "role": role, "status": "reserved"}, id)
+        key = endpoint.api_key.get_secret_value().strip() or os.environ.get(endpoint.api_key_env, "").strip()
+        headers = {"X-Client-Request-Id": id}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        body = {"model": endpoint.model, "messages": messages, "stream": False,
+                endpoint.output_limit_field: output_bound}
+        if endpoint.disable_thinking:
+            body["thinking"] = {"type": "disabled"}
+        started = time.perf_counter()
+        input_usage = output_usage = None
+        text, truncated = None, False
+        try:
+            deadline = max(.001, min(endpoint.timeout_seconds, self.budget.remaining_time()))
+            async def request():
+                async with httpx.AsyncClient(timeout=deadline, trust_env=role != "local" and endpoint.use_system_proxy, transport=self.transport) as client:
+                    response = await client.post(endpoint.base_url + "/chat/completions", headers=headers, json=body)
+                    if response.status_code in {400, 413, 422} and role == "local":
+                        message = response.text[:2000].lower()
+                        if ("context_length_exceeded" in message
+                                or "exceeds the available context size" in message
+                                or "maximum context length" in message):
+                            raise ModelContextExceeded()
+                    response.raise_for_status()
+                    return response.json()
+            async def bounded():
+                pending = asyncio.create_task(request())
+                expires = time.monotonic() + deadline
+                try:
+                    while not pending.done():
+                        if self.budget.stop_requested():
+                            raise UserStopped("user_stop")
+                        remaining = expires - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("request_deadline")
+                        await asyncio.wait({pending}, timeout=min(.05, remaining))
+                    return await pending
+                finally:
+                    if not pending.done():
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+            payload = asyncio.run(bounded())
+            usage = payload.get("usage") or {}
+            input_usage, output_usage = usage.get("prompt_tokens"), usage.get("completion_tokens")
+            choice = payload["choices"][0]
+            text = (choice.get("message") or {}).get("content") or ""
+            truncated = choice.get("finish_reason") == "length"
+            record = {"id": id, "role": role, "model": endpoint.model, "status": "completed",
+                      "text": text, "truncated": truncated}
+        except Exception as error:
+            record = {"id": id, "role": role, "status": "failed", "error": type(error).__name__}
+        actual_cost = cost(input_usage, output_usage)
+        self.budget.settle_llm(id, input_usage, output_usage,
+                               cost_usd=actual_cost if actual_cost is not None else reserved_cost)
+        record["elapsed_seconds"] = time.perf_counter() - started
+        record["cost_status"] = "computed_from_configured_prices" if actual_cost is not None else "reserved_estimate" if reserved_cost is not None else "unknown"
+        self.registry.put("model_calls", record, id)
+        if text is None:
+            raise RuntimeError(record["error"])
+        return text, truncated

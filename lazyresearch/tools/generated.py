@@ -35,9 +35,16 @@ def evaluate(source, inputs):
 
 
 def register(root, task, args):
-    if evaluate(args.source,args.example) != args.expected:
-        raise ValueError("Example result differs from expected value; revise the function or example")
-    return {"verdict":"observed","registered":args.name,"scope":"submitted example passed"}
+    try:
+        actual = evaluate(args.source, args.example)
+    except Exception as error:
+        raise ValueError("样例运行失败：" + str(error)[:300] + "；请修正函数后重新提交。") from error
+    if actual != args.expected:
+        raise ValueError("样例校验未通过：source(example)=" + json.dumps(actual, ensure_ascii=False)[:300]
+                         + "，expected=" + json.dumps(args.expected, ensure_ascii=False)[:300]
+                         + "；请修正函数或样例，不得只修改 expected 迎合错误实现。")
+    return {"verdict": "observed", "registered": args.name, "registration": "pending",
+            "scope": "样例校验通过，待真实调用验证后正式注册"}
 
 
 def invoke(root, task, args):

@@ -56,7 +56,9 @@ def search_favorita(task, material, registry, budget, tool, ask, emit, evidence,
                    "data": "逐日销量、门店、商品族、促销，预测期 16 天"}
         instruction = ("你是决策 Agent。根据已测分数和失败反馈，提出一组从未试过的参数，目标是最小化 RMSLE。"
                        "所有候选使用同一个时间开发折。可改变训练周数、同星期几的聚合方式、是否使用促销。"
-                       "先试有根据的方案，再围绕最佳方案改进或探索差异较大的方案。假设用一句简短中文。")
+                       "先试有根据的方案，再围绕最佳方案改进或探索差异较大的方案。假设用一句简短中文。"
+                       + ("最近多次执行失败：请先改变聚合方法或促销设置，而不是只微调训练周数；"
+                          "评审的 next_step 建议应优先考虑。" if len(recent_errors) >= 2 else ""))
         args = None
         source = "决策 Agent"
         for attempt in ("", "-retry"):
@@ -128,6 +130,7 @@ def search_favorita(task, material, registry, budget, tool, ask, emit, evidence,
                                "verdict": "supported" if score < best["candidate"] else "refuted"}
                 trial = {"id": id, "parameters": args, "candidate": score, "source": source}
                 trials.append(trial)
+                recent_errors.clear()
                 if best is None or score < best["candidate"]:
                     best = trial
         else:

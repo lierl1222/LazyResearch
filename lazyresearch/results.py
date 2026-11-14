@@ -13,9 +13,13 @@ METHOD_NAMES = {"weekday_log_mean": "工作日对数均值", "weekday_log_median
 def result_markdown(registry, report, *, save=False):
     if not report:
         return ""
-    content = (favorita_technical_report(registry, report)
-               if is_favorita_run(registry, report)
-               else generic_result_markdown(registry, report))
+    saved = registry.get("final_report") or {}
+    if saved.get("markdown"):
+        content = saved["markdown"]
+    else:
+        content = (favorita_technical_report(registry, report)
+                   if is_favorita_run(registry, report)
+                   else generic_result_markdown(registry, report))
     if save:
         path = registry.root / "result.md"
         temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
@@ -137,7 +141,7 @@ def favorita_technical_report(registry, report):
                      f"（{len(valid)} 个有效候选中的最优，第 {best['turn']} 轮）。")
     if has_holdout:
         lines.append(f"- 独立验证 RMSLE：{holdout_candidate:.5f}，季节朴素基线 {holdout_baseline:.5f}，相对降低 {reduction:.2f}%。")
-        lines.append("- 结论：锁定方案在留出的独立验证折上显著优于季节朴素基线。")
+        lines.append("- 结论：锁定方案在留出的独立验证折上优于季节朴素基线（点估计比较，未做显著性检验）。")
     else:
         lines.append("- 独立验证未执行或未完成，以上分数只代表开发折表现。")
     lines.append("")
@@ -249,7 +253,7 @@ def favorita_technical_report(registry, report):
         gap = 100 * (holdout_candidate / best["outcome"]["candidate"] - 1)
         analysis.append(f"- 泛化差距：开发折最优 {best['outcome']['candidate']:.5f}，独立验证 {holdout_candidate:.5f}"
                         f"（{gap:+.2f}%）。开发折经过多次比较选参，存在自适应选择偏差，独立验证折的分数是更保守、"
-                        "更可信的泛化估计；候选在该折上仍显著优于基线，说明工作日聚合的改进不是开发折特有的假象。")
+                        "更可信的泛化估计；候选在该折上仍优于基线（点估计），说明工作日聚合的改进不是开发折特有的假象。")
     method_groups = group_scores(valid, "method")
     if len(method_groups) == 2 and all(name in method_groups for name in ("weekday_log_mean", "weekday_log_median")):
         (mean_n, mean_score), (median_n, median_score) = (method_groups["weekday_log_mean"],
@@ -276,7 +280,7 @@ def favorita_technical_report(registry, report):
             "- log1p 变换与 RMSLE 目标一致，对低销量序列的相对误差敏感；中位数变体进一步抵抗促销日与异常值的干扰。",
             "- 促销调整使用中心化回归、岭收缩与斜率截断，避免少量促销日主导估计。"]
     if has_holdout:
-        pros.insert(2, f"- 独立验证折上显著优于季节朴素基线（相对降低 {reduction:.2f}%），"
+        pros.insert(2, f"- 独立验证折上优于季节朴素基线（相对降低 {reduction:.2f}%，点估计），"
                        "说明工作日聚合捕获了稳定的周内周期性，且该改进在留出折上成立。")
     cons = ["- 方法族只利用星期几周期性，未建模节假日、长期趋势、价格与宏观经济协变量；"
             "16 天预测期内的趋势漂移无法刻画。",

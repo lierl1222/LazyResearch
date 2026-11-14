@@ -1,5 +1,6 @@
 """LLM-directed research with bounded delegation and durable, replayable decisions."""
 import argparse
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -15,6 +16,7 @@ from .iteration import stop_reason
 from .models import Record
 from .research_tools import Tool, load_tools, execute_tool
 from .presentation import explain_reason, progress_entry
+from .final_report import finalize_result
 from .results import result_markdown
 from .research_review import review_evidence
 from .science.budget import BudgetExceeded, BudgetGovernor
@@ -39,6 +41,7 @@ class Task(Record):
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     max_delegations: int = Field(default=4, ge=1, le=20)
     max_worker_turns: int = Field(default=4, ge=2, le=20)
+    max_pending_failures: int = Field(default=2, ge=1, le=5)
 
 
 class CapabilityPlan(Record):
@@ -88,13 +91,52 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
     catalog = {name: {"purpose": tool.purpose, "arguments": tool.resolve()[0].model_json_schema()}
                for name, tool in enabled.items()}
     generated = {}
-    def publish(definition):
+    pending = {}
+    def publish(definition, *, status="verified"):
         name = definition["name"]
-        generated[name] = definition["source"]
+        if status == "verified":
+            generated[name] = definition["source"]
         spec = Tool(material="any_task",label=name,purpose=definition["purpose"],module="generated",
                     schema="Inputs",function="invoke")
         enabled[name] = spec
-        catalog[name] = {"purpose":spec.purpose,"arguments":spec.resolve()[0].model_json_schema()}
+        catalog[name] = {"purpose":spec.purpose,"arguments":spec.resolve()[0].model_json_schema(),
+                         "status":status}
+    def source_for(name):
+        if name in pending:
+            return pending[name]["definition"]["source"]
+        return generated.get(name)
+    def tool_signature(name, args):
+        """Dedupe key that includes the tool's code version, so a revised implementation
+        can be re-verified with the same inputs that previously failed."""
+        key = [name, args]
+        if name in pending:
+            key.append(["pending", pending[name]["version"]])
+        elif name in generated:
+            key.append(["source", hashlib.sha256(generated[name].encode("utf8")).hexdigest()[:16]])
+        return json.dumps(key, sort_keys=True)
+    def stage_pending(definition):
+        name = definition["name"]
+        version = pending[name]["version"] + 1 if name in pending else 1
+        pending[name] = {"definition": definition, "failures": 0, "version": version, "last_error": None}
+        publish(definition, status="pending")
+        registry.put("pending_tools", {**definition, "status": "pending", "failures": 0,
+                                       "version": version}, name)
+    def promote_pending(name, outcome):
+        entry = pending.pop(name)
+        definition = entry["definition"]
+        registry.put("generated_tools", definition, name)
+        publish(definition, status="verified")
+        registry.put("pending_tools", {**definition, "status": "verified",
+                                       "failures": entry["failures"], "version": entry["version"]}, name)
+        outcome["registration"] = "verified"
+    def discard_pending(name, entry, outcome):
+        pending.pop(name, None)
+        enabled.pop(name, None)
+        catalog.pop(name, None)
+        registry.put("pending_tools", {**entry["definition"], "status": "discarded",
+                                       "failures": entry["failures"], "version": entry["version"]}, name)
+        outcome["registration"] = "discarded"
+        outcome["pending_failures"] = entry["failures"]
     for definition in registry.list("generated_tools"):
         publish(definition)
     evidence, reports = {}, []
@@ -160,7 +202,7 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                     except RuntimeError as retry_error:
                         failures[route] = str(retry_error)
                         emit("model", role=route, model=endpoint.model, reason=str(retry_error))
-                if route == "local" and reason == "HTTPStatusError":
+                if route == "local" and reason in {"HTTPStatusError", "ConnectError", "ReadTimeout"}:
                     unavailable.add(route)
         if failures:
             message = "；".join(f"{'本地' if route == 'local' else '云端'}模型：{explain_reason(reason)}"
@@ -169,9 +211,20 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
         raise RuntimeError("没有可用的模型端点，或云端请求额度已用完。")
 
     def result(status, summary, citations=()):
+        for name, entry in pending.items():
+            registry.put("pending_tools", {**entry["definition"], "status": "unverified",
+                                           "failures": entry["failures"], "version": entry["version"]}, name)
+        pending_summary = [{"name": name, "status": "unverified", "failures": entry["failures"]}
+                           for name, entry in pending.items()]
+        if pending_summary:
+            summary += (f" 另有 {len(pending_summary)} 个工具仅通过样例校验、未完成真实调用验证，未正式注册："
+                        + "、".join(item["name"] for item in pending_summary) + "。")
         emit("conclusion", status=status, summary=summary, citations=list(citations), budget=budget.snapshot())
-        return {"status": status, "summary": summary, "citations": list(citations),
-                "evidence": evidence, "delegations": reports, "budget": budget.snapshot()}
+        output = {"status": status, "summary": summary, "citations": list(citations),
+                  "evidence": evidence, "delegations": reports, "budget": budget.snapshot()}
+        if pending_summary:
+            output["pending_tools"] = pending_summary
+        return output
 
     checkpoint = None
     def finish_with_evidence(reason):
@@ -180,7 +233,9 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
         if checkpoint:
             summary, refs = checkpoint
             return result("reported", summary + " · " + reason, refs)
-        refs = [key for key, value in evidence.items() if value.get("verdict") and not value.get("error")]
+        refs = [key for key, value in evidence.items()
+                if value.get("verdict") and not value.get("error")
+                and not value.get("registered") and value.get("registration") != "pending"]
         return result("reported" if refs else "inconclusive", reason, refs)
 
     if not enabled:
@@ -242,7 +297,10 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                     return result("inconclusive", "修正后仍无法识别规划引用的观测，证据不足。")
             emit("plan", summary=decision.objective_or_conclusion, round=turn + 1, decision=decision.model_dump())
             if decision.action == "finish":
-                usable = any(evidence[r].get("verdict") in {"supported", "refuted", "inconclusive", "observed"} for r in decision.evidence)
+                usable = any(evidence[r].get("verdict") in {"supported", "refuted", "inconclusive", "observed"}
+                             and not evidence[r].get("registered")
+                             and evidence[r].get("registration") != "pending"
+                             for r in decision.evidence)
                 if usable:
                     checkpoint = (decision.objective_or_conclusion,decision.evidence)
                 if reason:
@@ -255,22 +313,58 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
             if turn == task.max_delegations:
                 break
             history = []
+            failures = []
+            error_streak = 0
+            tool_streaks = {}
             report = {"objective": decision.objective_or_conclusion, "steps": history, "stalled": True}
             reports.append(report)
+            worker_instruction = ("Investigate the assigned objective. Use the most specific matching registered tool. "
+                                  "Do not repeat completed experiments. Keep all fields brief. "
+                                  "Inspect independent verifier feedback, revise parameters or hypothesis when appropriate, "
+                                  "or return a finding with its limitations. "
+                                  "注册新工具分两步：register_tool 只对提交的 example 做样例校验，通过后工具进入「待验证」状态，不会正式注册。"
+                                  "样例通过后必须立即用真实研究输入调用该 custom_ 工具（arguments 固定为 {\"inputs\": {...}}，不得复用 example），"
+                                  "只有真实调用成功返回有界 JSON 后才会正式注册。"
+                                  "真实调用报错时先核对参数键与类型；若错误来自函数实现，请用 register_tool 提交修订后的 source（同名覆盖待验证版本，失败计数清零）。"
+                                  "同一待验证工具连续运行失败达上限会被丢弃，必须重新 register_tool 提交修订版本。"
+                                  "遇到执行错误时：先读 recent_failures 中的错误与评审建议，改变至少一个维度（工具或参数），禁止重复已失败的组合；"
+                                  "blocked_tools 列出的工具本轮禁止选择。")
             for step in range(task.max_worker_turns):
                 if stop_reason(task,budget,turn):
                     break
                 id = f"worker-{turn}-{step}"
                 available = initial_catalog if not evidence else catalog
-                if (history and history[-1]["validation"].get("registered")
-                        and history[-1].get('review', {}).get('action') != 'revise'):
+                if history and history[-1]["validation"].get("registered"):
                     name = history[-1]["validation"]["registered"]
-                    available = {name: catalog[name]}
-                worker = ask(id, "Investigate the assigned objective. Use the most specific matching registered tool. When a capability is missing, call register_tool with a JavaScript function expression and a falsifiable example; on success invoke the new custom name with fresh inputs. Do not repeat completed experiments. Keep all fields brief. "
-                             "Inspect independent verifier feedback, revise parameters or hypothesis when appropriate, "
-                             "or return a finding with its limitations.", {**context, "tools": available, "objective": report["objective"],
+                    available = {name: catalog[name]} if name in catalog else available
+                    if "register_tool" in catalog:
+                        available["register_tool"] = catalog["register_tool"]
+                failure_counts = {}
+                for tool_name, count in tool_streaks.items():
+                    if count >= 2:
+                        failure_counts[tool_name] = count
+                blocked = set(failure_counts)
+                if error_streak >= 3:
+                    review = history[-1].get("review") or {} if history else {}
+                    report["finding"] = review.get("limitations") or review.get("next_step") or "多次执行失败，未能取得有效结果。"
+                    report["limitations"] = "连续多次工具执行失败：" + "；".join(
+                        dict.fromkeys(f"{failure['tool']}: {failure['error'][:80]}" for failure in failures[-3:]))
+                    emit("revision", round=turn + 1,
+                         summary="连续执行失败，提前结束本轮委派：" + report["limitations"][:240])
+                    break
+                selectable = {name: spec for name, spec in available.items() if name not in blocked}
+                step_instruction = worker_instruction + (" blocked_tools 中的工具已连续失败两次，禁止选择；请换用其他工具、"
+                                                         "用 register_tool 修订实现，或 return 汇报限制。" if blocked else "")
+                worker = ask(id, step_instruction, {**context, "tools": selectable, "objective": report["objective"],
                              "prior_evidence": evidence, "history": history,
-                             "reviews": registry.list('research_reviews')[-4:]},
+                             "reviews": registry.list('research_reviews')[-4:],
+                             "recent_failures": failures[-3:],
+                             "attempted": [attempt[:160] for attempt in sorted(seen)[-8:]],
+                             "blocked_tools": sorted(blocked),
+                             "pending_tools": {name: {"purpose": entry["definition"]["purpose"],
+                                                     "failures": entry["failures"],
+                                                     "last_error": entry["last_error"]}
+                                              for name, entry in pending.items()}},
                              Experiment, decision.reasoning_level == "complex" or bool(history and (
                                  history[-1].get('invalid') or
                                  history[-1].get('review', {}).get('action') == 'revise' or
@@ -285,35 +379,78 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                 tool_label = tool.label if tool else "未注册工具"
                 emit("hypothesis", summary=worker.hypothesis_or_finding, prediction=worker.prediction_or_limitation,
                      round=turn + 1, observation_id=id, tool_label=tool_label)
+                source = None
                 try:
+                    if worker.tool in blocked:
+                        raise ValueError(f"工具 {worker.tool} 在本轮已连续失败两次，请换用其他工具或 return 汇报限制。")
                     if tool is None or worker.tool not in available:
                         raise ValueError("当前材料不支持所选工具")
                     args = tool.resolve()[0].model_validate(worker.arguments).model_dump()
-                    signature = json.dumps([worker.tool, args], sort_keys=True)
+                    if (worker.tool in pending
+                            and args.get("inputs") == pending[worker.tool]["definition"]["example"]):
+                        raise ValueError("验证输入不能与注册样例相同，请使用真实研究输入。")
+                    signature = tool_signature(worker.tool, args)
                     if signature in seen:
                         raise ValueError("相同工具和参数已经尝试，请调整参数或汇报")
                     seen.add(signature)
                     emit("execution", summary=worker.tool, tool_label=tool_label, arguments=args,
                          observation_id=id, round=turn + 1)
-                    extra = {"generated_source": generated[worker.tool]} if worker.tool in generated else {}
+                    source = source_for(worker.tool)
+                    extra = {"generated_source": source} if source else {}
                     outcome = execute_isolated(registry, budget, id, execute_tool,
                                {**extra, "tool": worker.tool, "tool_spec": tool.model_dump(by_alias=True),
                                 "arguments": args, "task": material})
                     if worker.tool == "register_tool" and outcome.get("registered") == args["name"]:
-                        registry.put("generated_tools", args, args["name"])
-                        publish(args)
+                        if args["name"] in generated:
+                            outcome = {"error": f"工具名 {args['name']} 已正式注册并通过真实调用验证；"
+                                                "如需不同实现，请使用新的 custom_ 名称。"}
+                        else:
+                            stage_pending(args)
+                            tool_streaks.pop(args["name"], None)
+                            emit("revision", round=turn + 1, observation_id=id, tool_label=tool_label,
+                                 summary=f"工具 {args['name']} 样例校验通过，进入待验证状态；"
+                                         "请立即用真实输入调用一次以完成正式注册。")
+                    elif worker.tool in pending:
+                        if outcome.get("error"):
+                            entry = pending[worker.tool]
+                            entry["failures"] += 1
+                            entry["last_error"] = str(outcome["error"])[:300]
+                            registry.put("pending_tools", {**entry["definition"], "status": "pending",
+                                                           "failures": entry["failures"],
+                                                           "version": entry["version"]}, worker.tool)
+                            outcome["registration"] = "pending"
+                            outcome["pending_failures"] = entry["failures"]
+                            if entry["failures"] >= task.max_pending_failures:
+                                discard_pending(worker.tool, entry, outcome)
+                        else:
+                            promote_pending(worker.tool, outcome)
+                            tool_streaks.pop(worker.tool, None)
                 except ValueError as error:
                     outcome = {"error": str(error)[:500]}
+                if outcome.get("error"):
+                    error_streak += 1
+                    tool_streaks[worker.tool] = tool_streaks.get(worker.tool, 0) + 1
+                    failures.append({"tool": worker.tool, "error": str(outcome["error"])[:200]})
+                else:
+                    error_streak = 0
+                    tool_streaks[worker.tool] = 0
                 evidence[id] = outcome
                 emit("validation", summary=outcome.get("verdict", outcome.get("error", "unknown")),
                      observation_id=id, tool_label=tool_label, outcome=outcome, round=turn + 1)
-                if (outcome.get("verdict") in {"refuted", "inconclusive"}
+                if outcome.get("registration") == "verified":
+                    emit("revision", round=turn + 1, observation_id=id, tool_label=tool_label,
+                         summary=f"工具 {worker.tool} 已通过真实调用验证，正式注册。")
+                elif outcome.get("registration") == "discarded":
+                    emit("revision", round=turn + 1, observation_id=id, tool_label=tool_label,
+                         summary=f"待验证工具 {worker.tool} 连续运行失败 {task.max_pending_failures} 次，已丢弃且未注册；"
+                                 "请重新提交修订版本，或改用现有工具。")
+                elif (outcome.get("verdict") in {"refuted", "inconclusive"}
                         or outcome.get("error") or outcome.get("match") is False):
                     summary = ("材料中未找到匹配内容，子 Agent 可更换搜索条件或工具。"
                                if outcome.get("match") is False else "验证结果提示需要调整假设或实验。")
                     emit("revision", summary=summary,
                          observation_id=id, tool_label=tool_label, round=turn + 1)
-                review_action = {**action, 'source': generated[worker.tool]} if worker.tool in generated else action
+                review_action = {**action, 'source': source} if source else action
                 review = review_evidence(ask, registry, emit, id, task.goal, review_action, outcome,
                                          prior=history, round=turn + 1)
                 history.append({"id": id, "action": action, "validation": outcome, "review": review,
@@ -345,8 +482,21 @@ def main(argv=None):
             parser.error("Choose a new run directory to preserve previous evidence.")
         registry.put("task", material)
         budget = BudgetGovernor(registry, task.budget)
-        output = research(task, material, registry, ScienceGateway(config, registry, budget, allow_reporting=True), budget)
-        result_markdown(registry, output, save=True)
+        gateway = ScienceGateway(config, registry, budget, allow_reporting=True)
+
+        def emit(stage, **details):
+            append_report(root, stage, details)
+            with registry.transaction() as db:
+                events = registry.get_from(db, "events", "current") or []
+                events.append({"id": len(events) + 1, "stage": stage, **details})
+                registry.put_into(db, "events", "current", events)
+
+        output = research(task, material, registry, gateway, budget, emit=emit)
+        try:
+            finalize_result(registry, output, gateway, budget, emit=emit)
+        except Exception:
+            result_markdown(registry, output, save=True)
+        output["budget"] = budget.snapshot()
         registry.put("report", output)
         (root / "report.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     print(root.resolve() / "report.json")

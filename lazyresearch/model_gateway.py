@@ -44,6 +44,7 @@ class Endpoint(Record):
     api_key_env: str = ""
     timeout_seconds: float = Field(default=20, gt=0, le=600)
     max_output_tokens: int = Field(default=256, ge=1, le=16384)
+    report_max_output_tokens: int = Field(default=2400, ge=64, le=16384)
     output_limit_field: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
     input_overhead_tokens: int = Field(default=256, ge=0, le=65536)
     json_output: bool = False

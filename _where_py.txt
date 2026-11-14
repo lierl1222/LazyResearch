@@ -1,4 +1,0 @@
-E:\Application\msys64\mingw64\bin\python.exe
-E:\Tool\Anaconda\python.exe
-C:\Users\Lierl\AppData\Local\Microsoft\WindowsApps\python.exe
-信息: 用提供的模式无法找到文件。

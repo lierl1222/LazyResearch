@@ -24,7 +24,9 @@ def review_evidence(ask, registry, emit, id, goal, hypothesis, outcome, *, prior
     try:
         decision = ask('review-' + id,
             '你是独立研究评审。根据真实工具结果检查假设是否有证据支持、字段是否匹配、验证是否独立、'
-            '有没有泄漏或重复实验。observed 仅表示执行过，工具注册样例通过不等于研究假设得到验证。'
+            '有没有泄漏或重复实验。observed 仅表示执行过，工具注册样例通过不等于研究假设得到验证；'
+            '待验证工具（registration=pending）的真实调用成功只证明工具可执行，不代表研究假设成立；'
+            '被丢弃的工具（registration=discarded）不得作为任何结论的证据。'
             '先从研究领域的定义独立推导应计算的量、单位和正负号，再核对工具源码，'
             '不能因为样例与代码一致就认可公式，也不能仅修改 expected 迎合错误代码。'
             'RMSLE 越小越好，只有相同开发折可比较；最终留出集结果不得用于后续调参。'

@@ -109,20 +109,17 @@ function Deploy-Ollama {
             $model += ':latest'
         }
         if ($tags.models.name -notcontains $model) {
-            if ($model -eq 'qwen2.5:1.5b') {
-                $weights = Join-Path $PSScriptRoot 'models\qwen2.5-1.5b-instruct-q4_k_m.gguf'
-                if (-not (Test-Path -LiteralPath $weights -PathType Leaf) -or
-                    (Get-Item -LiteralPath $weights).Length -lt 100MB) {
-                    throw 'Bundled Qwen weights are missing or still an LFS pointer. Run git lfs pull or extract the complete project bundle.'
-                }
-                Write-Host "Verifying and importing bundled Qwen weights (1.12 GB)..."
-                $expected = '6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e'
-                if ((Get-FileHash -LiteralPath $weights -Algorithm SHA256).Hash -ne $expected) {
-                    throw 'Bundled Qwen weights failed SHA-256 verification.'
-                }
+            $weights = Join-Path $PSScriptRoot 'models\qwen2.5-1.5b-instruct-q4_k_m.gguf'
+            $expected = '6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e'
+            $bundled = (Test-Path -LiteralPath $weights -PathType Leaf) -and
+                (Get-Item -LiteralPath $weights).Length -ge 100MB -and
+                ((Get-FileHash -LiteralPath $weights -Algorithm SHA256).Hash -eq $expected)
+            if ($bundled) {
+                Write-Host 'Verifying and importing bundled Qwen weights (1.12 GB)...'
                 $modelfile = Join-Path $PSScriptRoot 'models\Modelfile'
                 Invoke-Checked $OllamaPath @('create', $model, '-f', $modelfile)
             } else {
+                Write-Host "Pulling $($Local.model) from the Ollama registry..."
                 Invoke-Checked $OllamaPath @('pull', $Local.model)
             }
         }

@@ -1,2 +1,0 @@
-quickjs ok <module 'quickjs' from 'D:\\Repos\\PMTI\\.venv\\Lib\\site-packages\\quickjs\\__init__.py'>
-pytest 9.2.0

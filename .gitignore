@@ -9,3 +9,7 @@ dist/
 runs/
 data/synthetic_demo.csv
 .pytest_cache/
+.vscode/
+_dump_run.py
+_*.txt
+*.log
