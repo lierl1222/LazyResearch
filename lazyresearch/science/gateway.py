@@ -51,7 +51,7 @@ class ScienceGateway:
                 return (inputs * endpoint.input_price_per_million + outputs * endpoint.output_price_per_million) / 1_000_000
             return None
         reserved_cost = cost(input_bound, output_bound)
-        self.budget.reserve_llm(id, input_bound, output_bound, cost_usd=reserved_cost, allow_reporting=self.allow_reporting)
+        self.budget.reserve_llm(id, input_bound, output_bound, cost_usd=reserved_cost, allow_reporting=self.allow_reporting, role=role)
         self.registry.put("model_calls", {"id": id, "role": role, "status": "reserved"}, id)
         key = endpoint.api_key.get_secret_value().strip() or os.environ.get(endpoint.api_key_env, "").strip()
         headers = {"X-Client-Request-Id": id}
@@ -59,7 +59,29 @@ class ScienceGateway:
             headers["Authorization"] = f"Bearer {key}"
         body = {"model": endpoint.model, "messages": messages, "stream": False,
                 endpoint.output_limit_field: output_bound}
-        if endpoint.json_output:
+        if role == "local" and endpoint.base_url.rstrip("/") in {"http://127.0.0.1:11434/v1", "http://localhost:11434/v1"}:
+            shape = schema.model_json_schema()
+            if schema.__name__ == "Direction":
+                references = list(context.get("observations", {}))
+                shape["properties"]["evidence"] = ({"type":"array","items":{"type":"string","enum":references}}
+                    if references else {"type":"array","maxItems":0,"items":{"type":"string"}})
+
+            if schema.__name__ == "Experiment" and context.get("tools"):
+                # Constrain both the tool name and its argument keys for a small local model.
+                variants = []
+                for name, spec in context["tools"].items():
+                    props = {**shape["properties"], "action": {"const": "experiment"},
+                             "tool": {"const": name}, "arguments": spec["arguments"]}
+                    variants.append({"type": "object", "properties": props, "required": list(props),
+                                     "additionalProperties": False})
+                variants.append({"type":"object","properties":{"action":{"const":"return"},
+                    **{k:shape["properties"][k] for k in ("hypothesis_or_finding","prediction_or_limitation")}},
+                    "required":["action","hypothesis_or_finding","prediction_or_limitation"],"additionalProperties":False})
+                shape = {"anyOf": variants}
+            body["temperature"] = 0
+            body["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": schema.__name__, "schema": shape}}
+        elif endpoint.json_output:
             body["response_format"] = {"type": "json_object"}
         if endpoint.disable_thinking:
             body["thinking"] = {"type": "disabled"}

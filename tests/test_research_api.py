@@ -46,8 +46,12 @@ class ResearchApiTests(unittest.TestCase):
                 self.assertEqual(result["status"],"reported",result)
                 self.assertEqual(result["budget"]["experiment_count"],1)
                 self.assertTrue(any(e["stage"]=="validation" for e in result["events"]))
+                markdown = client.get("/research/runs/"+id+"/result.md").text
+                self.assertEqual(markdown,result["result"])
+                self.assertIn("supported",markdown)
                 self.assertIn("validation",client.get("/research/runs/"+id+"/report").text)
                 with zipfile.ZipFile(io.BytesIO(client.get("/research/runs/"+id+"/artifacts").content)) as z:
+                    self.assertEqual(z.read("result.md").decode(),markdown)
                     self.assertIn("model_calls.json",z.namelist())
                     self.assertIn("workers/worker-0-0.json",z.namelist())
                 self.assertEqual(client.get("/research/runs/not-a-run").status_code,404)

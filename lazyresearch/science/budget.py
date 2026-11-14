@@ -1,4 +1,5 @@
 import time
+from contextlib import contextmanager
 
 from .registry import Registry
 from .schemas import ScienceBudget
@@ -16,6 +17,30 @@ class BudgetGovernor:
             if registry.get_from(db, "budget", "current") is None:
                 registry.put_into(db, "budget", "current", {"started": time.time(), "operations": {}})
 
+    @contextmanager
+    def discussion_time(self):
+        """Charge active discussion time after completion, excluding time the user was away."""
+        with self.registry.transaction() as db:
+            report = self.registry.get_from(db, "report", "current")
+            if report:
+                ledger = self.registry.get_from(db, "budget", "current")
+                if not ledger.get("discussions"):
+                    used = ledger.get("paused_seconds", report.get("budget", {}).get("wall_seconds", 0))
+                    ledger["started"] = time.time() - used
+                    ledger.pop("paused_seconds", None)
+                ledger["discussions"] = ledger.get("discussions", 0) + 1
+                self.registry.put_into(db, "budget", "current", ledger)
+        try:
+            yield
+        finally:
+            if report:
+                with self.registry.transaction() as db:
+                    ledger = self.registry.get_from(db, "budget", "current")
+                    ledger["discussions"] -= 1
+                    if not ledger["discussions"]:
+                        ledger["paused_seconds"] = time.time() - ledger["started"]
+                    self.registry.put_into(db, "budget", "current", ledger)
+
     def snapshot(self):
         return self._snapshot(self.registry.get("budget"))
 
@@ -27,9 +52,10 @@ class BudgetGovernor:
         return {
             "input_tokens": sum(o["input_tokens"] for o in calls),
             "output_tokens": sum(o["output_tokens"] for o in calls),
+            "cloud_requests": sum(o.get("role") == "cloud" for o in calls),
             "llm_calls": len(calls), "experiment_count": len(experiments),
             "cpu_seconds": sum(o["cpu_seconds"] for o in compute),
-            "wall_seconds": time.time() - ledger["started"],
+            "wall_seconds": ledger.get("paused_seconds", time.time() - ledger["started"]),
             "unknown_usage_calls": sum(o.get("usage_status") != "actual" for o in calls),
             "api_cost_usd": sum(o["cost_usd"] for o in calls) if calls and all(o.get("cost_usd") is not None for o in calls) else (0 if not calls else None),
             "operations": ledger["operations"], "limits": self.limits.model_dump(),
@@ -50,7 +76,7 @@ class BudgetGovernor:
         if self.enforce_llm_limits:
             if snapshot["llm_calls"] >= self.limits.max_llm_calls:
                 raise BudgetExceeded("llm_call_budget")
-            if snapshot["input_tokens"] >= self.limits.max_llm_input_tokens or snapshot["output_tokens"] >= self.limits.max_llm_output_tokens:
+            if (self.limits.max_llm_input_tokens is not None and snapshot["input_tokens"] >= self.limits.max_llm_input_tokens) or snapshot["output_tokens"] >= self.limits.max_llm_output_tokens:
                 raise BudgetExceeded("token_budget")
             cap = self.limits.max_api_cost_usd
             if cap is not None and snapshot["api_cost_usd"] is not None and snapshot["api_cost_usd"] >= cap:
@@ -86,7 +112,7 @@ class BudgetGovernor:
             op.update(status="settled", cpu_status="measured" if cpu_seconds is not None else "reserved_unknown")
             self.registry.put_into(db, "budget", "current", ledger)
 
-    def reserve_llm(self, id, input_tokens, output_tokens, cost_usd=None, *, allow_reporting=False):
+    def reserve_llm(self, id, input_tokens, output_tokens, cost_usd=None, *, allow_reporting=False, role=None):
         if input_tokens < 0 or output_tokens < 0:
             raise ValueError("Negative token reservation")
         with self.registry.transaction() as db:
@@ -95,14 +121,16 @@ class BudgetGovernor:
                 raise BudgetExceeded("operation_already_reserved")
             s = self._snapshot(ledger)
             self._check_time(s, allow_reporting=allow_reporting)
+            if role == "cloud" and self.limits.max_cloud_requests is not None and s["cloud_requests"] >= self.limits.max_cloud_requests:
+                raise BudgetExceeded("cloud_request_budget")
             if s["llm_calls"] >= self.limits.max_llm_calls:
                 raise BudgetExceeded("llm_call_budget")
-            if s["input_tokens"] + input_tokens > self.limits.max_llm_input_tokens or s["output_tokens"] + output_tokens > self.limits.max_llm_output_tokens:
+            if (self.limits.max_llm_input_tokens is not None and s["input_tokens"] + input_tokens > self.limits.max_llm_input_tokens) or s["output_tokens"] + output_tokens > self.limits.max_llm_output_tokens:
                 raise BudgetExceeded("token_budget")
             cap = self.limits.max_api_cost_usd
             if cap is not None and (cost_usd is None or s["api_cost_usd"] is None or s["api_cost_usd"] + cost_usd > cap):
                 raise BudgetExceeded("cost_budget_or_unknown_pricing")
-            ledger["operations"][id] = {"kind": "llm", "status": "reserved", "input_tokens": input_tokens,
+            ledger["operations"][id] = {"kind": "llm", "role": role, "status": "reserved", "input_tokens": input_tokens,
                                         "output_tokens": output_tokens, "usage_status": "reserved_unknown", "cost_usd": cost_usd}
             self.registry.put_into(db, "budget", "current", ledger)
 

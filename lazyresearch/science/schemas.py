@@ -42,7 +42,8 @@ class ValidationConfig(Record):
 
 
 class ScienceBudget(Record):
-    max_llm_input_tokens: int = Field(default=12000, ge=0)
+    max_cloud_requests: int | None = Field(default=None, ge=0)
+    max_llm_input_tokens: int | None = Field(default=None, ge=0)
     max_llm_output_tokens: int = Field(default=4000, ge=0)
     max_llm_calls: int = Field(default=20, ge=0)
     max_experiments: int = Field(default=12, ge=0)

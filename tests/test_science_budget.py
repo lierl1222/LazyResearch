@@ -63,3 +63,10 @@ def test_exhausted_cpu_prevents_paid_call(tmp_path):
     governor.settle_experiment("e", 1)
     with pytest.raises(BudgetExceeded, match="cpu_budget"):
         governor.reserve_llm("c", 1, 1)
+
+def test_default_input_unlimited_still_counts_tokens(tmp_path):
+    governor = BudgetGovernor(Registry(tmp_path), ScienceBudget(), enforce_llm_limits=True)
+    governor.reserve_llm("long", 1000000, 10)
+    governor.settle_llm("long", 150000, 5, 0)
+    assert governor.snapshot()["input_tokens"] == 150000
+    governor.reserve_llm("followup", 1000000, 10)

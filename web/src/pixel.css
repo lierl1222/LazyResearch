@@ -193,3 +193,9 @@ header .pixel-round-logo { width:58px;height:58px;flex-basis:58px;background:url
  .phase-tabs { min-height:34px;height:34px; }
  .phase-tab button { min-width:28px; }
 }
+
+.session-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:8px;border-bottom:2px solid #514a3b;background:#fbf5df}.session-tabs button,.messages>button{background:#fff9df;color:#443c2e;border:1px solid #665c47;padding:4px 8px}.session-tabs button[aria-current=true]{background:#ffda73}.attached{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px}.attach{position:relative;display:inline-flex;align-items:center;cursor:pointer}.attach input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}.attach .pixel-icon{zoom:.55}.composer-actions{align-items:center;flex-wrap:wrap}.worktree-branch small{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}.detail-record pre,.reply{white-space:pre-wrap;overflow-wrap:anywhere}.conversation .messages{min-height:0;overflow-y:auto}.worktree-card:has(small){min-height:90px}
+
+.metric-pixel{display:inline-block;width:8px;height:8px;margin-right:8px;background:#edc25d;border:1px solid #65532c;box-shadow:2px 2px #93856a}.settings-scroll .metric-pixel{background:#9cbb80}
+
+.usage-card .usage-split{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:6px;font-size:12px;color:#554c39}.usage-split strong{font-variant-numeric:tabular-nums}

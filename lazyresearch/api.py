@@ -13,6 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from .configuration import load_model_config
 from .models import ResearchTask
 from .runner import Runner
+from .results import result_markdown
+from .session import Question, ask
 from .research_service import ResearchService, Submission
 
 
@@ -38,9 +40,17 @@ def create_app(root: Path | None = None, *, runner: Runner | None = None, resear
     @app.get("/research/config")
     def research_config():
         endpoints = research_service.config
-        return {"mode": "research", "adapters": ["sequence", "cpu", "tabular"],
+        return {"mode": "research", "max_file_bytes": research_service.MAX_FILE_BYTES, "adapters": ["sequence", "cpu", "tabular"],
                 "models": {name: {"ready": bool(e.enabled and e.base_url and e.model)}
                            for name, e in (("local", endpoints.local), ("cloud", endpoints.cloud))}}
+
+    @app.post("/research/files", status_code=201)
+    async def upload_research_file(name: str, request: Request):
+        return await research_service.upload_stream(name, request.stream())
+
+    @app.post("/research/runs/{id}/messages")
+    def research_question(id: str, question: Question):
+        return ask(research_service, id, question)
 
     @app.post("/research/runs", status_code=202)
     def start_research(task: Submission):
@@ -65,6 +75,15 @@ def create_app(root: Path | None = None, *, runner: Runner | None = None, resear
     def research_artifacts(id: str):
         return Response(research_service.bundle(id), media_type="application/zip",
                         headers={"Content-Disposition": f'attachment; filename="research-{id}.zip"'})
+
+    @app.get("/research/runs/{id}/result.md")
+    def download_result(id: str):
+        registry = research_service.registry(id)
+        result = result_markdown(registry, registry.get("report"))
+        if not result:
+            raise HTTPException(409, "研究尚未结束")
+        return Response(result, media_type="text/markdown", headers={
+            "Content-Disposition": 'attachment; filename="result.md"'})
 
     @app.get("/research/runs/{id}/report")
     def live_research_report(id: str):
