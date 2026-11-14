@@ -12,6 +12,7 @@ from .research_tools import execute_tool
 from .science.budget import BudgetExceeded
 from .science.execution import execute_isolated
 from .tools.forecasting import ForecastParameters, finalize_favorita
+from .research_review import review_evidence
 
 
 class ForecastChoice(ForecastParameters):
@@ -50,6 +51,7 @@ def search_favorita(task, material, registry, budget, tool, ask, emit, evidence,
         context = {"goal": task.goal, "metric": "RMSLE", "optimization": "minimize",
                    "best": best, "trials": trials[-8:], "attempted": sorted(attempted),
                    "recent_errors": recent_errors[-2:], "candidate_rounds_left": candidate_limit - turn,
+                   "reviews": registry.list('research_reviews')[-3:],
                    "previous_research": compact_text(list(previous_research)[-1:], 240),
                    "data": "逐日销量、门店、商品族、促销，预测期 16 天"}
         instruction = ("你是决策 Agent。根据已测分数和失败反馈，提出一组从未试过的参数，目标是最小化 RMSLE。"
@@ -59,7 +61,8 @@ def search_favorita(task, material, registry, budget, tool, ask, emit, evidence,
         source = "决策 Agent"
         for attempt in ("", "-retry"):
             try:
-                choice = ask(f"director-{turn}{attempt}", instruction, context, ForecastChoice)
+                choice = ask(f"director-{turn}{attempt}", instruction, context, ForecastChoice,
+                             complex_step=bool(attempt or recent_errors))
             except (BudgetExceeded, RuntimeError) as error:
                 source = "本机补选 · " + explain_reason(str(error))
                 break
@@ -134,6 +137,9 @@ def search_favorita(task, material, registry, budget, tool, ask, emit, evidence,
         evidence[id] = outcome
         reports.append({"objective": hypothesis, "parameters": args, "observation_id": id, "source": source})
         emit("validation", round=round_number, observation_id=id, tool_label=label, outcome=outcome)
+        review_evidence(ask, registry, emit, id, task.goal,
+                        {"hypothesis": hypothesis, "parameters": args}, outcome,
+                        prior=trials, round=round_number)
 
     if budget.stop_requested():
         return result("stopped", explain_reason("user_stop"))
@@ -153,6 +159,9 @@ def search_favorita(task, material, registry, budget, tool, ask, emit, evidence,
     evidence["favorita-final"] = final
     emit("validation", round=len(reports) + 1, observation_id="favorita-final",
          tool_label="Favorita 最终独立验证", outcome=final)
+    review_evidence(ask, registry, emit, 'favorita-final', task.goal,
+                    {'locked_parameters': best['parameters'], 'phase': 'final_holdout'}, final,
+                    round=len(reports) + 1)
     if final.get("error"):
         status = "stopped" if final["error"] == "user_stop" else "reported"
         return result(status, summary + " 独立验证未完成：" + explain_reason(final["error"]) + "。", [best["id"]])

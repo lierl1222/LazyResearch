@@ -76,7 +76,10 @@ def test_cloud_plan_selects_only_executable_hypotheses(tmp_path):
     config = ModelConfig.model_validate({"cloud": {"enabled": True, "base_url": "https://test.invalid", "model": "test"}})
     runner = ScienceRunner(tmp_path, task, config)
     runner.registry.put("profile", {"id": "dataset-profile", "features": ["a", "b"]})
-    payload = {"choices": [{"message": {"content": '{"summary":"Test nonlinear alternatives","hypothesis_ids":["h-nonlinear_model","h-feature_interaction"]}'}}],
+    content = ('{"summary":"Test nonlinear alternatives","registrations":[],"hypotheses":['
+               '{"id":"h-nonlinear_model","claim":"Trees capture nonlinear response.","predicted_effect":"AP improves.","falsification_condition":"AP interval includes zero.","experiment_type":"nonlinear_model","priority":1},'
+               '{"id":"h-feature_interaction","claim":"Interactions add signal.","predicted_effect":"AP improves.","falsification_condition":"AP interval includes zero.","experiment_type":"feature_interaction","priority":2}]}')
+    payload = {"choices": [{"message": {"content": content}}],
                "usage": {"prompt_tokens": 100, "completion_tokens": 50}}
     runner.gateway.transport = httpx.MockTransport(lambda r: httpx.Response(200, json=payload))
     assert runner.hypothesize({})["next_template"] == "nonlinear_model"
@@ -113,10 +116,10 @@ def test_local_model_selects_next_executable_hypothesis(tmp_path):
         runner.registry.put("hypotheses", h.model_dump(), h.id)
     runner.registry.put("reviews", {"id": "review-e1", "verdict": "reject"}, "review-e1")
     runner.registry.put("experiments", {"experiment_id": "e1", "metrics": {}}, "e1")
-    payload = {"choices": [{"message": {"content": '{"hypothesis_id":"h-class_imbalance","reason":"Compare weighting after unsupported interaction"}'}}],
+    payload = {"choices": [{"message": {"content": '{"action":"continue","next_experiment_type":"class_imbalance","reason":"Compare weighting after unsupported interaction","evidence_ids":["review-e1"]}'}}],
                "usage": {"prompt_tokens": 50, "completion_tokens": 20}}
     runner.gateway.transport = httpx.MockTransport(lambda r: httpx.Response(200, json=payload))
     update = runner.decide({"iteration": 1, "stalled": 1, "completed_templates": ["feature_interaction"], "current_experiment": "e1"})
     assert update["next_template"] == "class_imbalance"
-    assert runner.registry.get("model_calls", "selection-1")["role"] == "local"
+    assert runner.registry.get("model_calls", "director-1-local")["role"] == "local"
     assert "review-e1" in runner.registry.get("hypotheses", "h-class_imbalance")["observations"]

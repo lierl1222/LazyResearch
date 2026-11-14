@@ -15,6 +15,11 @@ class BenchmarkArgs(Record):
     pass
 
 
+class CandidateChoice(Record):
+    candidate: str
+    hypothesis: str
+
+
 def matches(files):
     expected = json.loads((ASSETS/"manifest.json").read_text())
     return sorted(f.get("archive_path","") for f in files) == sorted(expected)
@@ -58,10 +63,11 @@ def benchmark(root,task,args):
     return measure(root,dict(task=task,source=(ASSETS/"sift.hpp").read_text(),phase="candidate",suite="dev"))
 
 
-def search(task,material,registry,budget,emit,result,evidence):
+def search(task,material,registry,budget,emit,result,evidence,ask=None):
     from ..iteration import stop_reason
     from ..science.budget import BudgetExceeded
     from ..science.execution import execute_isolated
+    from ..research_review import review_evidence
     project,candidate=prepare(registry.root,material)
     best=candidate.read_text(encoding="utf8")
     heap=(ASSETS/"sift.hpp").read_text(encoding="utf8")
@@ -74,14 +80,30 @@ def search(task,material,registry,budget,emit,result,evidence):
         out=execute_isolated(registry,budget,key,measure,dict(task=material,source=source,phase=label,suite=suite))
         evidence[key]=out
         emit("validation",round=turn,observation_id=key,summary=out.get("correctness",out.get("error")),outcome=out)
+        if ask:
+            review_evidence(ask, registry, emit, key, task.goal, label, out,
+                            prior=list(evidence.values())[-4:], round=turn)
         return out
     reason=""
     try:
-        for turn,(label,source) in enumerate(variants(best,heap),1):
+        candidates = dict(variants(best,heap))
+        for turn in range(1, len(candidates) + 1):
             reason=stop_reason(task,budget,turn-1,reserve)
             if reason:
                 break
-            emit("hypothesis",round=turn,summary=label)
+            label = next(iter(candidates))
+            hypothesis = label
+            if ask:
+                choice = ask(f'topk-director-{turn}',
+                    '根据真实开发集结果与独立评审选择下一个尚未执行的候选。candidate 必须来自 candidates。'
+                    '优先保证正确性，再最大化强基线加速比，解释选择理由。',
+                    {'goal': task.goal, 'candidates': list(candidates), 'observations': evidence,
+                     'reviews': registry.list('research_reviews')[-3:]}, CandidateChoice)
+                if choice.candidate not in candidates:
+                    raise RuntimeError('决策模型选择了已尝试或不存在的 Top-K 候选')
+                label, hypothesis = choice.candidate, choice.hypothesis
+            source = candidates.pop(label)
+            emit("hypothesis",round=turn,summary=hypothesis)
             out=trial(label,source,"dev",turn)
             score=out.get("geomean_speedup_vs_strong",0)
             if score>best_score:

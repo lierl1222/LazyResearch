@@ -88,6 +88,20 @@ class ScienceGateway:
                     **{k:shape["properties"][k] for k in ("hypothesis_or_finding","prediction_or_limitation")}},
                     "required":["action","hypothesis_or_finding","prediction_or_limitation"],"additionalProperties":False})
                 shape = {"anyOf": variants}
+            if schema.__name__ == "HypothesisPlan" and context.get("tools"):
+                # Constrain experiment_type to the known catalog for a small local model.
+                catalog = list(context["tools"])
+                proposals = (shape.get("$defs", {}).get("HypothesisProposal")
+                             or shape["properties"]["hypotheses"]["items"])
+                proposals["properties"]["experiment_type"] = {'anyOf': [
+                    {"type": "string", "enum": catalog},
+                    {"type": "string", "pattern": r"^custom_[a-z][a-z0-9_]{0,40}$"}]}
+            if schema.__name__ == "RoutingDecision":
+                candidates = context.get("candidate_experiment_types", [])
+                shape["properties"]["next_experiment_type"] = ({"type": "string", "enum": candidates}
+                    if candidates else {"type": "string", "maxLength": 0})
+                shape["properties"]["action"] = ({"enum": ["continue", "stop"]}
+                    if candidates else {"const": "stop"})
             body["temperature"] = 0
             body["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": schema.__name__, "schema": shape}}

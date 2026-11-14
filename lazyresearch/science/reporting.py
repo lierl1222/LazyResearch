@@ -20,7 +20,9 @@ def export_report(registry, config, budget, state):
     hypotheses, reviews, decisions = (registry.list(k) for k in ("hypotheses", "reviews", "decisions"))
     final, locked = registry.get("test_evaluation"), registry.get("locked_candidate")
     snapshot = budget.snapshot()
-    mode = "mock_fallback" if registry.get("fallback") else "api" if config.llm.provider == "configured_api" else "mock"
+    fallback = registry.get("fallback")
+    mode = (fallback.get("mode", "mock_fallback") if fallback
+            else "api" if config.llm.provider == "configured_api" else "mock")
     if registry.get("replay"):
         mode = "recorded_replay"
     versions = {name: importlib.metadata.version(name) for name in ("numpy", "pandas", "scikit-learn", "scipy", "langgraph", "pyarrow")}
@@ -34,8 +36,9 @@ def export_report(registry, config, budget, state):
                 "locked_candidate": locked, "test_evaluations": int(registry.get("test_gate") is not None),
                 "test_status": "completed" if final and not final.get("error") else "failed" if final else "not_evaluated",
                 "reproduce_command": f'python -m lazyresearch.science reproduce --run-dir "{root.resolve()}"',
-                "artifacts": ["config.resolved.yaml", "dataset_profile.json", "baseline_metrics.json", "hypotheses.jsonl", "experiments.jsonl", "reviews.jsonl", "decision_trace.jsonl", "budget.json", "report.md"]}
+                "artifacts": ["config.resolved.yaml", "dataset_profile.json", "baseline_metrics.json", "hypotheses.jsonl", "experiments.jsonl", "reviews.jsonl", "analyses.jsonl", "science_tools.jsonl", "decision_trace.jsonl", "budget.json", "report.md"]}
     for kind, name in [("hypotheses", "hypotheses.jsonl"), ("experiments", "experiments.jsonl"), ("reviews", "reviews.jsonl"),
+                       ("analyses", "analyses.jsonl"), ("science_tools", "science_tools.jsonl"),
                        ("decisions", "decision_trace.jsonl"), ("model_calls", "model_calls.jsonl")]:
         registry.export(kind, name)
     baseline_control = {"id": "baseline-control", "claim": "Logistic regression establishes a same-split predictive reference against the constant prior.",
@@ -67,7 +70,21 @@ def export_report(registry, config, budget, state):
     for r in reviews:
         lines.append(f"- {r['id']} → {r['verdict']}：{r['reason']}；差值区间 {r.get('delta_interval', '不适用')}。")
     for d in decisions:
-        lines.append(f"- {d['id']}：{d['action']}；{d['reason']}；依据 {d['evidence_ids']}。")
+        source = {"local": "本地模型", "cloud": "云端模型", "deterministic_fallback": "确定性回退", "recorded_replay": "复现重放"}.get(d.get("source"), d.get("source", "确定性回退"))
+        lines.append(f"- {d['id']}：{d['action']}；{d['reason']}；依据 {d['evidence_ids']}；决策来源 {source}。")
+    analyses = registry.list("analyses")
+    if analyses:
+        lines.extend(["", "## 实验分析（模型解读）"])
+        for a in analyses:
+            lines.extend([f"- {a['id']}：{a['summary']}",
+                          f"  含义：{a['implications']}",
+                          *((f"  异常：{a['anomalies']}",) if a.get("anomalies") else ()),
+                          *((f"  建议下一步：{a['suggested_next']}",) if a.get("suggested_next") else ())])
+    custom_tools = registry.list("science_tools")
+    if custom_tools:
+        lines.extend(["", "## 自定义工具（JS 沙箱注册）"])
+        for t in custom_tools:
+            lines.append(f"- {t['name']}：{t['purpose']}")
     lines.extend(["", "## 冻结方案与最终测试", f"验证集选择：{locked['experiment_id'] if locked else '无有效候选'}。"])
     if final and not final.get("error"):
         lines.extend(["最终测试真实指标（来源 test_metrics.json / predictions_test.csv）：", "```json",

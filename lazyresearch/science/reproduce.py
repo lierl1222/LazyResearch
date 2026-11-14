@@ -33,6 +33,11 @@ def reproduce(source: Path, destination: Path):
             return state
         for h in original.list("hypotheses"):
             runner.registry.put("hypotheses", h, h["id"])
+        for name, definition in original.list("science_tools"):
+            runner.registry.put("science_tools", definition, name)
+            runner.tools[name] = {"purpose": definition.get("purpose", ""), "custom": True,
+                                  "source": definition.get("source", ""),
+                                  "example": definition.get("example")}
         differences = []
         for previous in original.list("experiments"):
             spec = ExperimentSpec.model_validate(previous["spec"])

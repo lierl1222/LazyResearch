@@ -16,6 +16,7 @@ from .models import Record
 from .research_tools import Tool, load_tools, execute_tool
 from .presentation import explain_reason, progress_entry
 from .results import result_markdown
+from .research_review import review_evidence
 from .science.budget import BudgetExceeded, BudgetGovernor
 from .science.execution import execute_isolated
 from .science.gateway import ScienceGateway
@@ -210,8 +211,10 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                 return search(task,material,registry,budget,ask,emit,result,evidence)
             if "topk_benchmark" in chosen:
                 from .tools.topk import search
-                return search(task,material,registry,budget,emit,result,evidence)
+                return search(task,material,registry,budget,emit,result,evidence,ask=ask)
             if "favorita_candidate" not in chosen:
+                # Discovery and synthesis must remain available after the initial plan.
+                chosen = list(dict.fromkeys(chosen + [n for n in ('read_material', 'inspect_csv', 'register_tool') if n in enabled]))
                 enabled = {n:enabled[n] for n in chosen}
                 catalog = {n:catalog[n] for n in chosen}
                 initial_catalog = catalog
@@ -228,7 +231,7 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                            "Specify complex reasoning only when justified. When resources remain propose a distinct improvement, counterexample or robustness check. Cite verified findings as interim results. "
                            "For RMSLE, lower is better. Compare scores only within the same validation fold.")
             decision = ask(f"director-{turn}", instruction + (" Summarize the available evidence now; no further trials fit." if reason else ""), {**context, "tools": initial_catalog if not evidence else catalog, "observations": evidence, "reports": reports,
-                           "delegations_left": task.max_delegations - turn}, Direction, bool(reports and reports[-1]["stalled"]))
+                           "delegations_left": task.max_delegations - turn}, Direction, bool(reason or (reports and reports[-1]["stalled"])))
             if any(ref not in evidence for ref in decision.evidence):
                 emit("plan", summary="规划引用了无法识别的观测，正在修正引用。", round=turn + 1)
                 decision = ask(f"director-{turn}-citation-repair",
@@ -259,16 +262,20 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                     break
                 id = f"worker-{turn}-{step}"
                 available = initial_catalog if not evidence else catalog
-                if history and history[-1].get("invalid") and "register_tool" in catalog:
-                    available = {"register_tool": catalog["register_tool"]}
-                elif history and history[-1]["validation"].get("registered"):
+                if (history and history[-1]["validation"].get("registered")
+                        and history[-1].get('review', {}).get('action') != 'revise'):
                     name = history[-1]["validation"]["registered"]
                     available = {name: catalog[name]}
                 worker = ask(id, "Investigate the assigned objective. Use the most specific matching registered tool. When a capability is missing, call register_tool with a JavaScript function expression and a falsifiable example; on success invoke the new custom name with fresh inputs. Do not repeat completed experiments. Keep all fields brief. "
                              "Inspect independent verifier feedback, revise parameters or hypothesis when appropriate, "
                              "or return a finding with its limitations.", {**context, "tools": available, "objective": report["objective"],
-                             "prior_evidence": {r: evidence[r] for r in decision.evidence}, "history": history},
-                             Experiment, decision.reasoning_level == "complex" or (step > 0 and history[-1].get("invalid", False)))
+                             "prior_evidence": evidence, "history": history,
+                             "reviews": registry.list('research_reviews')[-4:]},
+                             Experiment, decision.reasoning_level == "complex" or bool(history and (
+                                 history[-1].get('invalid') or
+                                 history[-1].get('review', {}).get('action') == 'revise' or
+                                 history[-1]['validation'].get('verdict') in {'refuted', 'inconclusive'} or
+                                 history[-1]['validation'].get('match') is False)))
                 if worker.action == "return":
                     report["finding"] = worker.hypothesis_or_finding
                     report["limitations"] = worker.prediction_or_limitation
@@ -306,8 +313,12 @@ def research(task, material, registry, gateway, budget, emit=None, *, previous_r
                                if outcome.get("match") is False else "验证结果提示需要调整假设或实验。")
                     emit("revision", summary=summary,
                          observation_id=id, tool_label=tool_label, round=turn + 1)
-                history.append({"id": id, "action": action, "validation": outcome, "invalid": "error" in outcome})
-                if outcome.get("verdict"):
+                review_action = {**action, 'source': generated[worker.tool]} if worker.tool in generated else action
+                review = review_evidence(ask, registry, emit, id, task.goal, review_action, outcome,
+                                         prior=history, round=turn + 1)
+                history.append({"id": id, "action": action, "validation": outcome, "review": review,
+                                "invalid": "error" in outcome})
+                if outcome.get("verdict") and not outcome.get('registered') and outcome.get('match') is not False:
                     report["stalled"] = False
         return result("inconclusive", "已达到设定的研究委派轮次上限。")
     except (BudgetExceeded, RuntimeError) as error:

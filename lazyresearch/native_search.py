@@ -13,6 +13,7 @@ from pydantic import Field
 from .iteration import stop_reason
 from .models import Record
 from .science.execution import execute_isolated
+from .research_review import review_evidence
 
 
 class Revision(Record):
@@ -124,6 +125,9 @@ def search(task,material,registry,budget,ask,emit,result,evidence):
         out=execute_isolated(registry,budget,key,measure,{"files":files,"editable":editable,"entry":entry,"source":source})
         evidence[key]=out
         emit("validation",round=turn+1,summary=str(out.get("median_ns",out.get("error"))),outcome=out,observation_id=key)
+        assessment = review_evidence(ask, registry, emit, key, task.goal,
+                                     {'source': source[:6000]}, out, prior=feedback, round=turn+1)
+        feedback.append({'review': assessment})
         if not turn:
             if "median_ns" not in out:
                 return result("failed",out.get("error","Baseline failed"))

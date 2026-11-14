@@ -5,6 +5,30 @@ import './style.css'
 import './pixel.css'
 
 let uploadSequence=0
+function inline(text){
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).filter(Boolean).map((part,i)=>
+    part.startsWith('**')&&part.endsWith('**')?<strong key={i}>{part.slice(2,-2)}</strong>
+    :part.startsWith('`')&&part.endsWith('`')?<code key={i}>{part.slice(1,-1)}</code>
+    :part)
+}
+function Markdown({text}) {
+  const blocks=[];let table=null
+  const flushTable=()=>{if(table){const head=table[0].every(c=>/^:?-+:?$/.test(c))?1:0
+    blocks.push(<table key={blocks.length}><tbody>{table.slice(head).map((row,r)=><tr key={r}>{row.map((cell,c)=><td key={c}>{inline(cell)}</td>)}</tr>)}</tbody></table>);table=null}}
+  for(const line of text.replace(/^#[^\n]*\n/,'').split('\n')){
+    const trimmed=line.trim()
+    if(!trimmed){flushTable();continue}
+    if(/^\|.*\|$/.test(trimmed)){(table||(table=[])).push(trimmed.split('|').slice(1,-1).map(s=>s.trim()));continue}
+    flushTable()
+    if(trimmed.startsWith('## '))blocks.push(<h4 key={blocks.length}>{inline(trimmed.slice(3))}</h4>)
+    else if(trimmed.startsWith('### '))blocks.push(<h5 key={blocks.length}>{inline(trimmed.slice(4))}</h5>)
+    else if(trimmed.startsWith('- '))blocks.push(<p className="bullet" key={blocks.length}>{inline(trimmed.slice(2))}</p>)
+    else if(trimmed.startsWith('> '))blocks.push(<p className="quote" key={blocks.length}>{inline(trimmed.slice(2))}</p>)
+    else blocks.push(<p key={blocks.length}>{inline(trimmed)}</p>)
+  }
+  flushTable()
+  return <>{blocks}</>
+}
 const statusLabels = {queued:'排队中',running:'研究中',reported:'报告已生成',inconclusive:'证据不足',stopped:'研究已停止',failed:'执行失败',unsupported:'缺少可用工具'}
 async function request(url, options) {
   const response = await fetch(url, options)
@@ -143,7 +167,7 @@ function App() {
                 {data.research_history.map((item,i)=><li key={item.id}><a href={'?research='+item.id} target="_blank" rel="noreferrer">第 {i+1} 次 · {item.goal}</a></li>)}
               </ul></details>}
               <div className="user-message"><p>{data.task.goal}</p></div><Workflow nodes={nodes} open={open}/>
-              {data.result&&<article className="reply"><h3>研究结果</h3>{data.result.split('\n').slice(1).filter(Boolean).map((line,i)=>line.startsWith('## ')?<h4 key={i}>{line.slice(3)}</h4>:<p key={i}>{line}</p>)}<a href={'/research/runs/'+run+'/result.md'}>下载研究结果.md</a></article>}
+              {data.result&&<article className="reply"><h3>研究报告</h3><Markdown text={data.result}/><a href={'/research/runs/'+run+'/result.md'}>下载研究报告.md</a></article>}
             </>}
             {(data.exchanges||[]).filter(x=>!phase||(x.stage===phase&&(!x.run_id||x.run_id===run))).map(x=><article key={x.id}><div className="user-message"><p>{x.message}</p></div><p className="reply">{x.answer}</p></article>)}
           </>}
@@ -154,7 +178,7 @@ function App() {
           <textarea aria-label="研究任务或对话内容" required maxLength={3000} disabled={busy} rows={2} value={draft}
             onChange={e=>data?setDrafts({...drafts,[key]:e.target.value}):setGoal(e.target.value)}
             placeholder={!data?'描述具体研究任务…':node?'针对该阶段提问或继续研究…':'输入后续研究目标，或与本地模型对话…'}/>
-          <div className="composer-actions"><label className="attach"><i className="pixel-icon icon-folder"/>上传文件<input type="file" multiple disabled={running} accept=".csv,.tsv,.md,.txt,.json,.zip" onChange={e=>{upload(e.target.files);e.target.value=''}}/></label>
+          <div className="composer-actions"><label className="attach"><i className="pixel-icon icon-folder"/>上传文件<input type="file" multiple disabled={running} onChange={e=>{upload(e.target.files);e.target.value=''}}/></label>
           <div className="attached">{files.map(f=><span key={f.key}>{f.name} · {f.name.split('.').pop().toUpperCase()} · {f.status}<button type="button" aria-label={'移除 '+f.name} onClick={()=>setFiles(old=>old.filter(x=>x.key!==f.key))}>×</button></span>)}</div>
           {run&&running?<button type="button" disabled={busy} onClick={stop}>停止研究</button>:<button disabled={!canResearch} type="submit">{busy?'提交中':'研究'}</button>}
           {data&&<button type="button" onClick={send} title={config?.models.local.ready?'使用本地模型与当前窗口的记忆对话':'本地模型未配置'}
@@ -166,7 +190,7 @@ function App() {
         <div className="file-section"><h3>运行状态</h3><p>{statusLabels[data?.status]||'等待启动'}</p></div>
         {(data?.task.attachments ?? data?.task.files)?.map(f=><div className="file-row" key={f.id}><i className="pixel-icon icon-folder"/>{f.name}</div>)}
         <div className="file-section"><h3>验证记录</h3>{events.filter(e=>e.stage==='validation'&&e.outcome).map(e=><button className="file-row evidence-row" key={e.id} onClick={()=>open('validation',e.round,e.id)}><strong>{e.display.title}</strong><small>{e.display.summary}{e.display.fields.length>0&&' · '+e.display.fields.slice(0,2).map(({label,value})=>label+' '+value).join(' · ')}</small></button>)}</div>
-        {run&&<a className="file-row" target="_blank" rel="noreferrer" href={'/research/runs/'+run+'/report'}>实时运行报告 ↗</a>}{terminal&&<a className="file-row" href={'/research/runs/'+run+'/result.md'}>研究结果.md ↓</a>}{terminal&&<a className="file-row" href={'/research/runs/'+run+'/artifacts'}>下载研究包.zip ↓</a>}
+        {run&&<a className="file-row" target="_blank" rel="noreferrer" href={'/research/runs/'+run+'/report'}>实时运行报告 ↗</a>}{terminal&&<a className="file-row" href={'/research/runs/'+run+'/result.md'}>研究报告.md ↓</a>}{terminal&&<a className="file-row" href={'/research/runs/'+run+'/artifacts'}>下载研究包.zip ↓</a>}
       </div></section>
       <section className="panel metrics"><div className="right-heading"><i className="pixel-icon icon-bars"/><h2>资源用量</h2></div><div className="metrics-scroll"><dl>{metrics.map(([label,value,max,unit,field])=><div className="usage-card" key={label}><dt><span><i className="metric-pixel" aria-hidden="true"/>{label}</span><span className="usage-value"><b>{value}</b><small>/ {max ?? '—'} {unit}</small></span></dt><dd>{max!=null&&<div className="meter"><i style={{width:Math.min(100,max?value/max*100:0)+'%'}}/></div>}{field&&<div className="usage-split">{[['cloud','云端'],['local','本地'],['unknown','来源未知']].filter(([role])=>role!=='unknown'||used.by_model?.unknown).map(([role,name])=><span key={role}>{name} <strong>{(used.by_model?.[role]?.[field] ?? 0).toLocaleString()}</strong>{field==='calls'?' 次':''}</span>)}</div>}</dd></div>)}</dl>{used.unknown_usage_calls>0&&<p>含 {used.unknown_usage_calls} 次预留估算用量</p>}</div></section></aside>
     </div></main>

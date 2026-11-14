@@ -69,6 +69,7 @@ class LLMConfig(Record):
 
 class TaskConfig(Record):
     project_name: str = "lazyresearch-science"
+    domain: str = Field(default="", max_length=160, description="研究领域，用于工具选择与假设生成")
     dataset: DatasetConfig
     objective: Objective = Field(default_factory=Objective)
     validation: ValidationConfig = Field(default_factory=ValidationConfig)

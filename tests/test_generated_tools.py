@@ -9,6 +9,8 @@ def test_worker_repairs_registers_and_calls_new_tool(tmp_path):
         config = ModelConfig(local={"enabled":True,"base_url":"http://test","model":"fixture"})
 
         def ask(self, role, id, instruction, context, schema):
+            if schema.__name__ == 'EvidenceReview':
+                return schema(summary='核对函数结果', limitations='样例不能代替研究', next_step='用真实输入测试', action='validate')
             if schema.__name__ == "CapabilityPlan":
                 return schema(objective="no matching numeric function",tools=[])
             if schema.__name__ == "Direction":

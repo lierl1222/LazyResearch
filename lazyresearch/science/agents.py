@@ -6,6 +6,7 @@ from pydantic import Field
 from sklearn.metrics import average_precision_score
 
 from ..models import Record
+from ..tools.generated import Definition
 from .data import prepare_dataset
 from .experiments import ExperimentSpec
 
@@ -16,9 +17,60 @@ class HypothesisSpec(Record):
     observations: list[str] = Field(min_length=1, max_length=20)
     predicted_effect: str = Field(min_length=1, max_length=1000)
     falsification_condition: str = Field(min_length=1, max_length=1000)
-    experiment_type: Literal["feature_interaction", "nonlinear_model", "class_imbalance", "segment_discovery"]
+    experiment_type: str = Field(min_length=1, max_length=80)
     priority: int = Field(default=1, ge=1, le=10)
     status: Literal["proposed", "testing", "supported", "rejected", "inconclusive"] = "proposed"
+
+
+# --- LLM decision contracts for the science loop -----------------------------
+
+class HypothesisProposal(Record):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
+    claim: str = Field(min_length=1, max_length=1000)
+    predicted_effect: str = Field(min_length=1, max_length=1000)
+    falsification_condition: str = Field(min_length=1, max_length=1000)
+    experiment_type: str = Field(min_length=1, max_length=80, description="Built-in experiment type or a registered custom_<name> tool")
+    priority: int = Field(default=1, ge=1, le=10)
+
+
+class ToolRegistration(Record):
+    definition: Definition
+    justification: str = Field(default="", max_length=500)
+
+
+class HypothesisPlan(Record):
+    summary: str = Field(min_length=1, max_length=1000)
+    registrations: list[ToolRegistration] = Field(default_factory=list, max_length=2)
+    hypotheses: list[HypothesisProposal] = Field(min_length=1, max_length=8)
+
+
+class ExperimentPlan(Record):
+    features: list[str] = Field(default_factory=list, max_length=40)
+    model_name: Literal["dummy", "logistic", "random_forest"] = "logistic"
+    model_params: dict[str, float | int] = Field(default_factory=dict)
+    inputs: dict = Field(default_factory=dict, description="Bounded JSON inputs for a custom tool experiment")
+
+
+class ExperimentAnalysis(Record):
+    summary: str = Field(min_length=1, max_length=1200)
+    implications: str = Field(min_length=1, max_length=1200)
+    anomalies: str = Field(default="", max_length=600)
+    suggested_next: str = Field(default="", max_length=600)
+
+
+class RoutingDecision(Record):
+    action: Literal["continue", "stop"]
+    next_experiment_type: str = Field(default="", max_length=80)
+    reason: str = Field(min_length=1, max_length=1000)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=8)
+
+
+SCIENCE_TOOLS = {
+    "feature_interaction": {"purpose": "训练中选择的特征交互（交互多项式项 + 逻辑回归），与同切分逻辑回归基线比较验证 AP。"},
+    "nonlinear_model": {"purpose": "受限树集成（随机森林）捕捉非线性响应，与同切分同特征逻辑回归基线比较。"},
+    "class_imbalance": {"purpose": "类别加权逻辑回归改善样本不平衡下的排序；仅改变阈值不能支持该声明。"},
+    "segment_discovery": {"purpose": "训练集选择的高响应数值子群体在验证集上稳定；固定规则至少覆盖 20 个验证样本。"},
+}
 
 
 class DataScientist:

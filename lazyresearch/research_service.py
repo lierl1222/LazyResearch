@@ -1,5 +1,4 @@
 """Persistent HTTP adapter for the same research engine used by the CLI."""
-import codecs
 import io
 import json
 import re
@@ -56,30 +55,20 @@ class ResearchService:
 
     async def upload_stream(self, name, blocks, *, member=False):
         name = Path(name).name
-        if not name or len(name)>160 or not member and Path(name).suffix.lower() not in {".csv",".txt",".md",".json",".tsv",".zip"}:
-            raise HTTPException(422, "支持 UTF-8 CSV、TSV、TXT、MD、JSON 文件及其 ZIP 压缩包")
+        if not name or len(name) > 160:
+            raise HTTPException(422, "文件名无效")
         is_archive = not member and name.lower().endswith(".zip")
         key = uuid.uuid4().hex
         folder = self.root / "uploads" / key
         folder.mkdir(parents=True)
         size = 0
-        nonempty = False
-        decoder = codecs.getincrementaldecoder("utf-8-sig")()
         try:
             with (folder / "content").open("wb") as out:
                 async for block in blocks:
                     size += len(block)
                     if size > (self.MAX_ARCHIVE_BYTES if is_archive else self.MAX_FILE_BYTES):
                         raise HTTPException(413, "压缩包上限 1 GiB，普通文件上限 160 MiB")
-                    if is_archive or member:
-                        out.write(block)
-                        continue
-                    text = decoder.decode(block)
-                    if chr(0) in text:
-                        raise HTTPException(422, "文件包含二进制内容")
-                    nonempty = nonempty or bool(text.strip())
                     out.write(block)
-                decoder.decode(b"", final=True)
             if is_archive:
                 members = []
                 try:
@@ -103,15 +92,13 @@ class ResearchService:
                 meta = dict(id=key, name=name, size=size)
                 (folder / "meta.json").write_text(json.dumps({**meta,"members":members}), encoding="utf8")
                 return meta
-            if not member and not nonempty:
+            if not member and not size:
                 raise HTTPException(422, "文件为空")
             meta = dict(id=key, name=name, size=size)
             (folder / "meta.json").write_text(json.dumps(meta), encoding="utf8")
             return meta
-        except BaseException as error:
+        except BaseException:
             shutil.rmtree(folder)
-            if isinstance(error, UnicodeDecodeError):
-                raise HTTPException(422, "文件需要使用 UTF-8 编码") from error
             raise
 
     def create(self, submission):

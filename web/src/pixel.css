@@ -212,3 +212,12 @@ header .pixel-round-logo { width:58px;height:58px;flex-basis:58px;background:url
 .observation-fields dt {font-weight:650}
 .observation-fields dd {margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .research-history {margin:0 0 14px;padding:7px 10px;background:#fbf5df}
+
+/* 研究报告排版 */
+.reply h3 {margin:2px 0 10px}
+.reply h4 {margin:14px 0 6px;color:#3d382c}
+.reply h5 {margin:10px 0 4px;color:#4d4637}
+.reply table {border-collapse:collapse;margin:8px 0;font-size:11px;color:#655e52}
+.reply td {border:1px solid #cfc9b8;padding:3px 7px;background:#fffef8;white-space:normal}
+.reply .quote {border-left:3px solid #e8b733;padding-left:10px;color:#847860}
+.reply .bullet {margin:3px 0}

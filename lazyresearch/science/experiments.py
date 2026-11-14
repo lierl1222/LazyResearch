@@ -21,7 +21,9 @@ from .data import PreparedDataset
 class ExperimentSpec(Record):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     hypothesis_id: str
-    experiment_type: Literal["baseline", "feature_interaction", "nonlinear_model", "class_imbalance", "segment_discovery"] = "baseline"
+    experiment_type: Literal["baseline", "feature_interaction", "nonlinear_model", "class_imbalance", "segment_discovery", "custom_tool"] = "baseline"
+    tool_name: str = Field(default="", max_length=80)
+    tool_inputs: dict = Field(default_factory=dict)
     data_features: list[str] = Field(default_factory=list)
     preprocessing: Literal["train_only_pipeline"] = "train_only_pipeline"
     model_name: Literal["dummy", "logistic", "random_forest"] = "logistic"
@@ -33,6 +35,10 @@ class ExperimentSpec(Record):
 
     @model_validator(mode="after")
     def controlled_parameters(self):
+        if self.experiment_type == "custom_tool":
+            if not self.tool_name:
+                raise ValueError("custom_tool requires a registered tool name")
+            return self
         permitted = {"dummy": {}, "logistic": {"C": (.001, 100)},
                      "random_forest": {"n_estimators": (10, 200), "max_depth": (1, 12), "min_samples_leaf": (2, 50)}}[self.model_name]
         for key, value in self.model_params.items():

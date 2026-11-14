@@ -21,10 +21,13 @@ class ResearchTests(unittest.TestCase):
             config = ModelConfig(local={"enabled": True, "base_url": "http://example.test", "model": "test"})
 
             def ask(self, role, id, instruction, context, schema):
+                if schema.__name__ == 'EvidenceReview':
+                    return schema(summary='检查实测分数', limitations='仅当前折', next_step='调整窗口', action='revise')
                 if schema.__name__ != "ForecastChoice":
                     return schema(action="finish", objective_or_conclusion="结束")
                 round_number = len(context["attempted"])
                 if round_number == 1:
+                    self_test.assertEqual(context['reviews'][-1]['next_step'], '调整窗口')
                     self_test.assertEqual(context["best"]["candidate"], .44)
                     if "rejected_duplicate" not in context:
                         return schema(weeks=8, method="weekday_log_median", use_promotion=False,
@@ -79,6 +82,10 @@ class ResearchTests(unittest.TestCase):
 
             def respond(request):
                 prompt = json.loads(json.loads(request.content)["messages"][1]["content"])
+                if request.headers['X-Client-Request-Id'].startswith('review-'):
+                    answer = dict(summary='实测证据已检查', limitations='有限区间', next_step='修正多项式', action='revise')
+                    return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(answer)}}],
+                                                     'usage': {'prompt_tokens': 10, 'completion_tokens': 10}})
                 calls.append(prompt)
                 n = len(calls)
                 if n == 1:
@@ -101,12 +108,14 @@ class ResearchTests(unittest.TestCase):
             report = research(task, task.model_dump(), registry, gateway, budget)
             self.assertEqual(report["status"], "reported", report)
             self.assertEqual(report["budget"]["experiment_count"], 2)
-            self.assertEqual(report["budget"]["llm_calls"], 4)
+            self.assertEqual(report["budget"]["llm_calls"], 6)
 
     def test_finish_is_provisional_while_distinct_trials_fit(self):
         class Gateway:
             config = ModelConfig(local={"enabled": True, "base_url": "http://fixture", "model": "test"})
             def ask(self,role,id,instruction,context,schema):
+                if schema.__name__ == 'EvidenceReview':
+                    return schema(summary='检查实测证据', limitations='有限区间', next_step='比较不同斜率', action='revise')
                 if schema.__name__ == "Direction":
                     return schema(action="finish",objective_or_conclusion="interim",
                                   evidence=list(context["observations"]))
@@ -141,6 +150,9 @@ class ResearchTests(unittest.TestCase):
             def respond(request):
                 body = json.loads(request.content)
                 context = json.loads(body["messages"][1]["content"])
+                if request.headers['X-Client-Request-Id'].startswith('review-'):
+                    decision = dict(summary='未匹配材料', limitations='证据不足', next_step='改变查询', action='revise')
+                    return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(decision)}}]})
                 if "registry" in context:
                     self.assertIn("read_material", context["registry"])
                     decision = {"objective":"读取数据","tools":["read_material"]}

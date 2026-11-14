@@ -7,14 +7,17 @@ import joblib
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
-from .agents import AlgorithmEngineer, DataScientist, HypothesisScientist, HypothesisSpec, ResearchDirector, ScientificReviewer
+from .agents import (AlgorithmEngineer, DataScientist, ExperimentAnalysis, ExperimentPlan,
+                     HypothesisPlan, HypothesisScientist, HypothesisSpec, ResearchDirector,
+                     RoutingDecision, ScientificReviewer, SCIENCE_TOOLS)
 from .budget import BudgetExceeded, BudgetGovernor
 from .execution import execute_isolated
 from .experiments import ExperimentSpec, run_experiment
 from .registry import Registry
 from .schemas import TaskConfig
-from .gateway import ScienceGateway, ResearchPlan, Selection
+from .gateway import ScienceGateway
 from ..configuration import load_model_config
+from ..tools.generated import evaluate as evaluate_js
 from .finalize import final_worker
 from .reporting import export_report
 
@@ -42,6 +45,20 @@ def experiment_worker(root: Path, payload: dict):
     return result
 
 
+def custom_tool_worker(root: Path, payload: dict):
+    from ..tools.generated import evaluate
+    value = evaluate(payload["source"], payload["inputs"])
+    return {"experiment_id": payload["id"], "hypothesis_id": payload["hypothesis_id"],
+            "spec": payload["spec"], "comparison_scope": "tool_observation",
+            "verdict": "observed", "value": value, "inputs": payload["inputs"],
+            "review": {"id": f"review-{payload['id']}", "experiment_id": payload["id"],
+                       "hypothesis_id": payload["hypothesis_id"],
+                       "experiment_type": "custom_tool", "verdict": "observed",
+                       "reason": "Custom tool executed with real inputs; observation recorded without statistical comparison.",
+                       "method": "custom_tool_observation",
+                       "limitations": ["Sandboxed JavaScript tool; no paired uncertainty interval."]}}
+
+
 class ScienceState(TypedDict, total=False):
     iteration: int
     completed_templates: list[str]
@@ -51,6 +68,13 @@ class ScienceState(TypedDict, total=False):
     stalled: int
     stop_reason: str
     error: str
+
+
+PROPOSE_INSTRUCTION = (
+    "HypothesisScientist: propose distinct, falsifiable hypotheses executable with the supplied experiment tools. "
+    "Ground claims in the data profile, domain, baselines and prior reviews; never invent experiment types outside the catalog. "
+    "For an uncovered capability, register at most two pure JavaScript tools (name custom_*, one JSON object input, no host APIs) "
+    "with a verified example, then reference them in hypotheses. Falsification conditions must be checkable by the referenced tool.")
 
 
 class ScienceRunner:
@@ -63,6 +87,13 @@ class ScienceRunner:
         self.registry.put("task", config.model_dump())
         self.budget = BudgetGovernor(self.registry, config.budget, enforce_llm_limits=config.llm.provider == "configured_api")
         self.director = ResearchDirector()
+        self.tools = {name: {**spec, "custom": False} for name, spec in SCIENCE_TOOLS.items()}
+        for definition in self.registry.list("science_tools"):
+            if isinstance(definition, dict) and definition.get("name"):
+                name = definition['name']
+                self.tools[name] = {"purpose": definition.get("purpose", ""), "custom": True,
+                                    "source": definition.get("source", ""),
+                                    "example": definition.get("example")}
         if config.llm.provider == "configured_api":
             model_config = (model_config or load_model_config()).model_copy(deep=True)
             if config.llm.model:
@@ -70,6 +101,85 @@ class ScienceRunner:
             self.gateway = ScienceGateway(model_config, self.registry, self.budget)
         else:
             self.gateway = None
+
+    def ask(self, id, instruction, context, schema, complex_step=False):
+        """Route a decision through model endpoints (local-first, cloud-first for complex steps).
+        Returns the validated decision, or None when every configured route failed."""
+        if not self.gateway:
+            return None
+        routes = ["cloud", "local"] if complex_step else ["local", "cloud"]
+        failures = {}
+        for route in routes:
+            endpoint = getattr(self.gateway.config, route)
+            if not (endpoint.enabled and endpoint.base_url and endpoint.model):
+                continue
+            cloud_limit = self.config.budget.max_cloud_requests
+            if route == 'cloud' and cloud_limit is not None and self.budget.snapshot()['cloud_requests'] >= cloud_limit:
+                continue
+            try:
+                return self.gateway.ask(route, f"{id}-{route}", instruction, context, schema)
+            except BudgetExceeded:
+                raise
+            except RuntimeError as error:
+                if self.budget.stop_requested():
+                    raise BudgetExceeded("user_stop") from error
+                failures[route] = str(error)
+        if failures:
+            self.registry.put("fallback", {"mode": "deterministic_fallback", "step": id,
+                                           "reason": "；".join(f"{route}:{message}" for route, message in failures.items())})
+        return None
+
+    def last_role(self, id):
+        cloud = self.registry.get("model_calls", f"{id}-cloud")
+        local = self.registry.get("model_calls", f"{id}-local")
+        record = cloud or local
+        return (record or {}).get("role") if record else None
+
+    def register_tools(self, registrations):
+        """Verify and register custom JS tools; returns the names that are now executable."""
+        registered = []
+        for item in registrations:
+            definition = item.definition
+            try:
+                if evaluate_js(definition.source, definition.example) != definition.expected:
+                    raise ValueError("Example result differs from expected value")
+            except Exception:
+                continue
+            self.registry.put("science_tools", definition.model_dump(), definition.name)
+            self.tools[definition.name] = {"purpose": definition.purpose, "custom": True,
+                                           "source": definition.source, "example": definition.example}
+            registered.append(definition.name)
+        return registered
+
+    def materialize_hypotheses(self, proposals, *, base_observations=()):
+        existing = {h["id"] for h in self.registry.list("hypotheses")}
+        seen, hypotheses = set(), []
+        for proposal in proposals:
+            if proposal.id in seen or proposal.id in existing or proposal.experiment_type not in self.tools:
+                continue
+            seen.add(proposal.id)
+            hypotheses.append(HypothesisSpec(id=proposal.id, claim=proposal.claim,
+                observations=list(dict.fromkeys(base_observations)),
+                predicted_effect=proposal.predicted_effect,
+                falsification_condition=proposal.falsification_condition,
+                experiment_type=proposal.experiment_type, priority=proposal.priority))
+        return hypotheses
+
+    def propose_hypotheses(self, context, id):
+        """Ask a model for a HypothesisPlan; registrations are verified and applied.
+        Returns (materialized hypotheses, plan) with ([], None) on failure."""
+        plan = self.ask(id, PROPOSE_INSTRUCTION, context, HypothesisPlan, complex_step=True)
+        if plan is None:
+            return [], None
+        self.register_tools(plan.registrations)
+        hypotheses = self.materialize_hypotheses(plan.hypotheses,
+                                                 base_observations=context.get("base_observations", ()))
+        if not hypotheses:
+            self.registry.put("fallback", {"mode": "deterministic_fallback", "step": id,
+                                           "reason": "模型提案未通过工具目录校验"})
+            return [], None
+        self.registry.put("research_plan", plan.model_dump())
+        return hypotheses, plan
 
     def initialize(self, state):
         if self.budget.remaining_time() <= 0:
@@ -85,7 +195,20 @@ class ScienceRunner:
         self.registry.put("dataset", result["dataset"])
         return {"iteration": 0, "completed_templates": [], "stalled": 0}
 
+    def _execute_custom(self, spec):
+        tool = self.tools.get(spec.tool_name)
+        if not tool or not tool.get("custom"):
+            raise ValueError("Registered tool missing: " + spec.tool_name)
+        payload = {"id": spec.id, "hypothesis_id": spec.hypothesis_id, "spec": spec.model_dump(),
+                   "source": tool["source"], "inputs": spec.tool_inputs}
+        result = execute_isolated(self.registry, self.budget, spec.id, custom_tool_worker, payload)
+        result.update(hypothesis_id=spec.hypothesis_id, spec=spec.model_dump())
+        self.registry.put("experiments", result, spec.id)
+        return result
+
     def _execute(self, spec, baseline=None):
+        if spec.experiment_type == "custom_tool":
+            return self._execute_custom(spec)
         payload = {"spec": spec.model_dump(), "top_fraction": self.config.objective.top_fraction,
                    "baseline": baseline, "bootstrap_samples": self.config.validation.bootstrap_samples,
                    "comparisons": self.config.research.max_hypotheses}
@@ -115,32 +238,34 @@ class ScienceRunner:
 
     def hypothesize(self, state):
         if not self.registry.list("hypotheses"):
-            hypotheses = HypothesisScientist().propose(self.registry.get("profile"))
-            if self.registry.get("experiments", "baseline-logistic"):
+            profile = self.registry.get("profile")
+            hypotheses = HypothesisScientist().propose(profile)
+            baseline_id = "baseline-logistic" if self.registry.get("experiments", "baseline-logistic") else None
+            if baseline_id:
                 for hypothesis in hypotheses:
-                    hypothesis.observations.append("baseline-logistic")
+                    hypothesis.observations.append(baseline_id)
             if not self.config.research.allow_advanced_models:
                 hypotheses = [h for h in hypotheses if h.experiment_type != "nonlinear_model"]
             if self.gateway:
                 try:
                     if self.budget.snapshot()["experiment_count"] >= self.config.budget.max_experiments:
                         raise BudgetExceeded("experiment_budget")
-                    plan = self.gateway.ask("cloud", "research-plan", "ResearchDirector: select and prioritize distinct executable hypothesis cards from the supplied hypotheses. Return hypothesis_ids using their exact IDs. Do not invent methods, edit claims, or quote evidence prose as IDs. The plan summary explains evidence-based priority; all tests and falsification rules are defined by the cards.",
-                                            {"objective": self.config.objective.model_dump(), "profile": self.registry.get("profile"),
-                                             "baselines": [{"id": e["experiment_id"], "metrics": e.get("metrics")} for e in self.registry.list("experiments")],
-                                             "hypotheses": [h.model_dump() for h in hypotheses],
-                                             "max_hypotheses": self.config.research.max_hypotheses}, ResearchPlan)
-                    available = {h.id: h for h in hypotheses}
-                    if len(set(plan.hypothesis_ids)) != len(plan.hypothesis_ids) or not set(plan.hypothesis_ids) <= set(available):
-                        raise ValueError("Invalid or duplicate hypothesis IDs")
-                    hypotheses = [available[id] for id in plan.hypothesis_ids]
-                    self.registry.put("research_plan", plan.model_dump())
+                    context = {"objective": self.config.objective.model_dump(),
+                               "domain": self.config.domain,
+                               "profile": profile,
+                               "baselines": [{"id": e["experiment_id"], "metrics": e.get("metrics")}
+                                             for e in self.registry.list("experiments")],
+                               "tools": {name: {"purpose": spec["purpose"], "custom": spec.get("custom", False),
+                                                "example": spec.get("example")}
+                                         for name, spec in self.tools.items()},
+                               "fallback_hypotheses": [h.model_dump() for h in hypotheses],
+                               "base_observations": [profile["id"]] + ([baseline_id] if baseline_id else []),
+                               "max_hypotheses": self.config.research.max_hypotheses}
+                    proposed, _ = self.propose_hypotheses(context, "hypotheses")
+                    if proposed:
+                        hypotheses = proposed
                 except BudgetExceeded as error:
                     return {"stop_reason": str(error)}
-                except (RuntimeError, ValueError) as error:
-                    if not self.config.llm.allow_mock:
-                        return {"stop_reason": "model_planning_failed"}
-                    self.registry.put("fallback", {"mode": "mock_fallback", "reason": type(error).__name__})
             for hypothesis in hypotheses[:self.config.research.max_hypotheses]:
                 self.registry.put("hypotheses", hypothesis.model_dump(), hypothesis.id)
         first = self.registry.list("hypotheses")[0]
@@ -148,13 +273,57 @@ class ScienceRunner:
 
     def plan_experiment(self, state):
         available = self.registry.list("hypotheses")
-        hypothesis = next((h for h in available if h["experiment_type"] == state["next_template"]), None)
+        tested_ids = {e.get('hypothesis_id') for e in self.registry.list('experiments')}
+        hypothesis = next((h for h in available if h["experiment_type"] == state["next_template"]
+                           and h['id'] not in tested_ids), None)
         if hypothesis is None:
             return {"stop_reason": "hypotheses_exhausted"}
         hypothesis = HypothesisSpec.model_validate(hypothesis)
-        spec = AlgorithmEngineer().plan(hypothesis, f"experiment-{state['iteration'] + 1}",
-                                       self.registry.get("profile")["features"], self.config.validation.random_seed,
-                                       min(3600, self.config.budget.max_single_experiment_seconds))
+        id = f"experiment-{state['iteration'] + 1}"
+        profile = self.registry.get("profile")
+        spec = None
+        if hypothesis.experiment_type in self.tools and self.tools[hypothesis.experiment_type].get("custom"):
+            inputs = None
+            if self.gateway:
+                try:
+                    plan = self.ask(f"engineer-{state['iteration']}",
+                        "Choose a bounded JSON inputs object for the registered custom tool. Use only numbers visible in the dataset profile, baselines and prior observations; never invent measurements.",
+                        {"objective": self.config.objective.model_dump(), "hypothesis": hypothesis.model_dump(),
+                         "profile": profile,
+                         "tool": {k: v for k, v in self.tools[hypothesis.experiment_type].items() if k != "source"},
+                         "prior_experiments": [e for e in self.registry.list("experiments") if not e.get("error")][-4:]},
+                        ExperimentPlan)
+                except BudgetExceeded:
+                    plan = None
+                if plan:
+                    inputs = plan.inputs
+            if inputs is None:
+                inputs = self.tools[hypothesis.experiment_type].get("example", {})
+            spec = ExperimentSpec(id=id, hypothesis_id=hypothesis.id, experiment_type="custom_tool",
+                                  tool_name=hypothesis.experiment_type, tool_inputs=inputs)
+        elif self.gateway:
+            try:
+                plan = self.ask(f"engineer-{state['iteration']}",
+                    "AlgorithmEngineer: choose features and bounded model parameters for the hypothesis from the dataset profile and prior experiments. Prefer few features; empty features uses all. Respect the parameter whitelist (logistic C in [.001,100]; random_forest n_estimators 10-200, max_depth 1-12, min_samples_leaf 2-50).",
+                    {"objective": self.config.objective.model_dump(), "hypothesis": hypothesis.model_dump(),
+                     "profile": profile,
+                     "prior_experiments": [e for e in self.registry.list("experiments") if not e.get("error")][-4:]},
+                    ExperimentPlan)
+            except BudgetExceeded:
+                plan = None
+            if plan:
+                try:
+                    spec = ExperimentSpec(id=id, hypothesis_id=hypothesis.id,
+                                          experiment_type=hypothesis.experiment_type,
+                                          data_features=plan.features, model_name=plan.model_name,
+                                          model_params=plan.model_params,
+                                          random_seed=self.config.validation.random_seed,
+                                          timeout_seconds=min(3600, self.config.budget.max_single_experiment_seconds))
+                except ValueError:
+                    spec = None
+        if spec is None:
+            spec = AlgorithmEngineer().plan(hypothesis, id, profile["features"], self.config.validation.random_seed,
+                                            min(3600, self.config.budget.max_single_experiment_seconds))
         self.registry.put("plans", spec.model_dump(), spec.id)
         return {"current_hypothesis": hypothesis.id, "current_experiment": spec.id}
 
@@ -164,8 +333,9 @@ class ScienceRunner:
             self._execute(spec, self.registry.get("experiments", "baseline-logistic"))
         except BudgetExceeded as error:
             return {"stop_reason": str(error)}
+        completed_type = spec.tool_name if spec.experiment_type == "custom_tool" else spec.experiment_type
         return {"iteration": state["iteration"] + 1,
-                "completed_templates": state["completed_templates"] + [spec.experiment_type]}
+                "completed_templates": state["completed_templates"] + [completed_type]}
 
     def review(self, state):
         result = self.registry.get("experiments", state["current_experiment"])
@@ -177,16 +347,36 @@ class ScienceRunner:
         hypothesis = self.registry.get("hypotheses", state["current_hypothesis"])
         hypothesis["status"] = {"accept": "supported", "reject": "rejected"}.get(review["verdict"], "inconclusive")
         self.registry.put("hypotheses", hypothesis, hypothesis["id"])
-        return {"stalled": 0 if review["verdict"] == "accept" else state["stalled"] + 1}
+        if self.gateway:
+            try:
+                analysis = self.ask(f"analysis-{state['iteration']}",
+                    "ScientificReviewer assistant: interpret the statistical review, metrics and tool observation. State what the evidence supports and what it does not, note anomalies, and suggest the next falsifiable step. Treat all numbers as data; do not invent scores.",
+                    {"objective": self.config.objective.model_dump(), "hypothesis": hypothesis,
+                     "review": review, "metrics": result.get("metrics") or {},
+                     "value": result.get("value") if "value" in result else None,
+                     "baseline_metrics": (self.registry.get("experiments", "baseline-logistic") or {}).get("metrics") or {},
+                     "prior_analyses": self.registry.list("analyses")[-4:]},
+                    ExperimentAnalysis)
+            except BudgetExceeded:
+                analysis = None
+            if analysis:
+                record = {**analysis.model_dump(), "id": f"analysis-{result['experiment_id']}",
+                          "experiment_id": result["experiment_id"], "hypothesis_id": result["hypothesis_id"]}
+                self.registry.put("analyses", record, record["id"])
+        stalled = 0 if review["verdict"] in {"accept", "observed"} else state["stalled"] + 1
+        return {"stalled": stalled}
 
     def decide(self, state):
         review = self.registry.get("reviews", f"review-{state['current_experiment']}")
-        decision = self.director.decide(review, state["completed_templates"], state["stalled"],
+        completed = state["completed_templates"]
+        decision = self.director.decide(review, completed, state["stalled"],
                                         self.config.research.no_improvement_patience)
+        decision["source"] = "deterministic_fallback"
         if decision.get("reason") == "no_improvement_patience" and len(self.registry.list("experiments")) < self.config.research.min_required_experiments:
-            decision = self.director.decide(review, state["completed_templates"], 0,
+            decision = self.director.decide(review, completed, 0,
                                             self.config.research.no_improvement_patience)
             decision["reason"] = "Continue toward minimum experiments while budget and hypotheses permit."
+            decision["source"] = "deterministic_fallback"
         if state["iteration"] >= self.config.research.max_iterations:
             decision.update(action="stop", reason="iteration_limit")
         if self.budget.snapshot()["experiment_count"] >= self.config.budget.max_experiments - 1:
@@ -195,26 +385,66 @@ class ScienceRunner:
         target = self.config.objective.target_score
         if target is not None and review["verdict"] == "accept" and current_result.get("metrics", {}).get("average_precision", 0) >= target:
             decision.update(action="stop", reason="validation_target_reached")
-        remaining_hypotheses = [h for h in self.registry.list("hypotheses") if h["experiment_type"] not in state["completed_templates"]]
-        if self.gateway and decision["action"] == "continue" and remaining_hypotheses and self.budget.snapshot()["experiment_count"] < self.config.budget.max_experiments:
-            role = "cloud" if state["stalled"] >= 2 else "local"
+        tested_ids = {e.get('hypothesis_id') for e in self.registry.list('experiments')}
+        remaining = [h for h in self.registry.list("hypotheses") if h['id'] not in tested_ids
+                     and h["experiment_type"] not in completed]
+        soft_stop = decision["action"] == "stop" and decision["reason"] in {"no_improvement_patience", "hypotheses_exhausted"}
+        can_llm = (self.gateway
+                   and self.budget.snapshot()["experiment_count"] < self.config.budget.max_experiments
+                   and state["iteration"] < self.config.research.max_iterations)
+        if can_llm and (decision["action"] == "continue" and remaining or soft_stop):
+            context = {"objective": self.config.objective.model_dump(), "domain": self.config.domain,
+                       "review": review, "analyses": self.registry.list("analyses")[-4:],
+                       "hypotheses": self.registry.list("hypotheses"),
+                       "completed_experiment_types": completed,
+                       "candidate_experiment_types": [h["experiment_type"] for h in remaining],
+                       "budget": {"experiments_left": self.config.budget.max_experiments - self.budget.snapshot()["experiment_count"],
+                                  "iterations_left": self.config.research.max_iterations - state["iteration"]}}
             try:
-                selection = self.gateway.ask(role, f"selection-{state['iteration']}",
-                                             "Select one available hypothesis using the real review and remaining budget.",
-                                             {"review": review, "available": remaining_hypotheses}, Selection)
-                chosen = next((h for h in remaining_hypotheses if h["id"] == selection.hypothesis_id), None)
-                if chosen is None:
-                    raise ValueError("Unknown hypothesis selected")
-                decision.update(next_template=chosen["experiment_type"], reason=selection.reason, source=role)
-            except (BudgetExceeded, RuntimeError, ValueError) as error:
-                decision.update(source="deterministic_fallback", model_failure=type(error).__name__)
+                routing = self.ask(f"director-{state['iteration']}",
+                    "ResearchDirector: route the next step from the real review, analyses and remaining budget. Prefer an untested complementary explanation after weak evidence; stop only when no falsifiable hypothesis remains or resources are nearly exhausted. Do not invent experiment types outside candidate_experiment_types.",
+                    context, RoutingDecision, complex_step=soft_stop or state["stalled"] >= 2)
+            except BudgetExceeded:
+                routing = None
+            if routing:
+                source = self.last_role(f"director-{state['iteration']}") or "model"
+                if routing.action == "stop":
+                    decision.update(action="stop", reason="model_decision_stop", source=source)
+                elif routing.next_experiment_type in {h["experiment_type"] for h in remaining}:
+                    known_reviews = {r["id"] for r in self.registry.list("reviews")}
+                    decision.update(action="continue", next_template=routing.next_experiment_type,
+                                    reason=routing.reason,
+                                    evidence_ids=[e for e in routing.evidence_ids if e in known_reviews],
+                                    source=source)
+        if can_llm and decision["action"] == "stop" and not remaining and decision["reason"] in {"hypotheses_exhausted", "model_decision_stop"}:
+            # Before giving up, let the model propose new hypotheses (and register tools) from the accumulated evidence.
+            try:
+                profile = self.registry.get("profile")
+                context = {"objective": self.config.objective.model_dump(), "domain": self.config.domain,
+                           "profile": profile,
+                           "reviews": self.registry.list("reviews")[-8:],
+                           "hypotheses": self.registry.list("hypotheses"),
+                           "tools": {name: {"purpose": spec["purpose"], "custom": spec.get("custom", False),
+                                            "example": spec.get("example")}
+                                     for name, spec in self.tools.items()},
+                           "base_observations": [profile["id"], *[r["id"] for r in self.registry.list("reviews")[-3:]]],
+                           "max_hypotheses": self.config.research.max_hypotheses}
+                created, _ = self.propose_hypotheses(context, f"new-hypotheses-{state['iteration']}")
+            except BudgetExceeded:
+                created = []
+            if created:
+                for hypothesis in created:
+                    self.registry.put("hypotheses", hypothesis.model_dump(), hypothesis.id)
+                decision.update(action="continue", next_template=created[0].experiment_type,
+                                reason="模型基于累积证据提出新假设：" + created[0].claim[:120],
+                                source=self.last_role(f"new-hypotheses-{state['iteration']}") or "model")
         if state["iteration"] >= self.config.research.max_iterations:
             decision.update(action="stop", reason="iteration_limit")
-        available = {h["experiment_type"] for h in self.registry.list("hypotheses")}
-        if decision.get("next_template") not in available and decision["action"] != "stop":
-            remaining = available - set(state["completed_templates"])
-            if remaining:
-                decision["next_template"] = sorted(remaining)[0]
+        available_types = {h["experiment_type"] for h in self.registry.list("hypotheses")}
+        if decision.get("next_template") not in available_types and decision["action"] != "stop":
+            remaining_types = available_types - set(completed)
+            if remaining_types:
+                decision["next_template"] = sorted(remaining_types)[0]
             else:
                 decision.update(action="stop", reason="hypotheses_exhausted")
         decision.update(id=f"decision-{state['iteration']}", experiment_id=state["current_experiment"])
