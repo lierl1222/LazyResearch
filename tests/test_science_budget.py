@@ -70,3 +70,14 @@ def test_default_input_unlimited_still_counts_tokens(tmp_path):
     governor.settle_llm("long", 150000, 5, 0)
     assert governor.snapshot()["input_tokens"] == 150000
     governor.reserve_llm("followup", 1000000, 10)
+
+
+def test_unlimited_total_calls_still_enforces_cloud_limit(tmp_path):
+    governor = BudgetGovernor(Registry(tmp_path), ScienceBudget(
+        max_llm_calls=None, max_cloud_requests=1), enforce_llm_limits=True)
+    governor.reserve_llm("cloud", 1, 1, role="cloud")
+    for index in range(21):
+        governor.reserve_llm(f"local-{index}", 1, 1, role="local")
+    with pytest.raises(BudgetExceeded, match="cloud_request_budget"):
+        governor.reserve_llm("cloud-again", 1, 1, role="cloud")
+    assert governor.snapshot()["llm_calls"] == 22

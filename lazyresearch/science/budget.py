@@ -10,9 +10,11 @@ class BudgetExceeded(RuntimeError):
 
 
 class BudgetGovernor:
-    def __init__(self, registry: Registry, limits: ScienceBudget, *, enforce_llm_limits=False):
+    def __init__(self, registry: Registry, limits: ScienceBudget, *, enforce_llm_limits=False,
+                 after_research=False):
         self.registry, self.limits = registry, limits
         self.enforce_llm_limits = enforce_llm_limits
+        self.after_research = after_research
         with registry.transaction() as db:
             if registry.get_from(db, "budget", "current") is None:
                 registry.put_into(db, "budget", "current", {"started": time.time(), "operations": {}})
@@ -64,8 +66,11 @@ class BudgetGovernor:
     def remaining_time(self):
         return max(0, self.limits.max_wall_time_seconds - self.snapshot()["wall_seconds"])
 
+    def stop_requested(self):
+        return not self.after_research and (self.registry.root / "stop.requested").exists()
+
     def _check_time(self, snapshot, *, allow_reporting=False):
-        if (self.registry.root / "stop.requested").exists():
+        if self.stop_requested():
             raise BudgetExceeded("user_stop")
         if snapshot["wall_seconds"] >= self.limits.max_wall_time_seconds:
             raise BudgetExceeded("wall_time_budget")
@@ -74,7 +79,7 @@ class BudgetGovernor:
         if not allow_reporting and snapshot["experiment_count"] >= self.limits.max_experiments:
             raise BudgetExceeded("experiment_budget")
         if self.enforce_llm_limits:
-            if snapshot["llm_calls"] >= self.limits.max_llm_calls:
+            if self.limits.max_llm_calls is not None and snapshot["llm_calls"] >= self.limits.max_llm_calls:
                 raise BudgetExceeded("llm_call_budget")
             if (self.limits.max_llm_input_tokens is not None and snapshot["input_tokens"] >= self.limits.max_llm_input_tokens) or snapshot["output_tokens"] >= self.limits.max_llm_output_tokens:
                 raise BudgetExceeded("token_budget")
@@ -123,7 +128,7 @@ class BudgetGovernor:
             self._check_time(s, allow_reporting=allow_reporting)
             if role == "cloud" and self.limits.max_cloud_requests is not None and s["cloud_requests"] >= self.limits.max_cloud_requests:
                 raise BudgetExceeded("cloud_request_budget")
-            if s["llm_calls"] >= self.limits.max_llm_calls:
+            if self.limits.max_llm_calls is not None and s["llm_calls"] >= self.limits.max_llm_calls:
                 raise BudgetExceeded("llm_call_budget")
             if (self.limits.max_llm_input_tokens is not None and s["input_tokens"] + input_tokens > self.limits.max_llm_input_tokens) or s["output_tokens"] + output_tokens > self.limits.max_llm_output_tokens:
                 raise BudgetExceeded("token_budget")

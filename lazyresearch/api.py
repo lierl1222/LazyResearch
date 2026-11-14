@@ -40,9 +40,12 @@ def create_app(root: Path | None = None, *, runner: Runner | None = None, resear
     @app.get("/research/config")
     def research_config():
         endpoints = research_service.config
+        models = {}
+        for name, endpoint in (("local", endpoints.local), ("cloud", endpoints.cloud)):
+            ready = bool(endpoint.enabled and endpoint.base_url and endpoint.model)
+            models[name] = {"ready": ready, "model": endpoint.model if ready else None}
         return {"mode": "research", "max_file_bytes": research_service.MAX_FILE_BYTES, "adapters": ["sequence", "cpu", "tabular"],
-                "models": {name: {"ready": bool(e.enabled and e.base_url and e.model)}
-                           for name, e in (("local", endpoints.local), ("cloud", endpoints.cloud))}}
+                "models": models}
 
     @app.post("/research/files", status_code=201)
     async def upload_research_file(name: str, request: Request):

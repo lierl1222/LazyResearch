@@ -48,8 +48,8 @@ class ResearchApiTests(unittest.TestCase):
                 self.assertTrue(any(e["stage"]=="validation" for e in result["events"]))
                 markdown = client.get("/research/runs/"+id+"/result.md").text
                 self.assertEqual(markdown,result["result"])
-                self.assertIn("supported",markdown)
-                self.assertIn("validation",client.get("/research/runs/"+id+"/report").text)
+                self.assertIn("结果支持假设",markdown)
+                self.assertIn("验证",client.get("/research/runs/"+id+"/report").text)
                 with zipfile.ZipFile(io.BytesIO(client.get("/research/runs/"+id+"/artifacts").content)) as z:
                     self.assertEqual(z.read("result.md").decode(),markdown)
                     self.assertIn("model_calls.json",z.namelist())

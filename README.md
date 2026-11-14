@@ -1,18 +1,20 @@
 # LazyResearch
 
-LazyResearch 是面向研究场景的本地工作台。LangGraph 编排规划、证据收集、假设、实验、验证与修正，FastAPI 提供运行接口，React/Vite 提供工作台，SQLite 保存运行状态和检查点。当前默认适配器提供可重复的研究闭环，用于验证编排、模型接入与预算控制。
+LazyResearch 是面向研究场景的本地工作台。React/Vite 和 FastAPI 提供研究入口，通用研究控制器通过主 Agent、子 Agent 和注册工具完成研究闭环，SQLite 保存决策、证据与预算。独立的表格科研 CLI 和旧演示使用 LangGraph 编排。总体架构、Agent 闭环和云端／本地模型路由见 [架构与赛题对应](docs/RESEARCH_ARCHITECTURE.md)。
 
 ## 运行模式
 
 ### 表格研究 G0 / P0
 
-业务任务书见 [RESEARCH_AGENT_GOALS.md](docs/RESEARCH_AGENT_GOALS.md)，融合范围见 [P0_IMPLEMENTATION.md](docs/P0_IMPLEMENTATION.md)。科学研究入口支持 CSV/Parquet 二分类、训练集 EDA、真实基线、可证伪假设、受控实验、统计审查、反馈迭代与一次性封存测试。现有 Web 保留通用 fixture 工作台；表格研究通过 CLI 和 JSON/Markdown 报告交付，Streamlit 迁移属于 P1。
+业务任务书见 [RESEARCH_AGENT_GOALS.md](docs/RESEARCH_AGENT_GOALS.md)，融合范围见 [P0_IMPLEMENTATION.md](docs/P0_IMPLEMENTATION.md)。独立表格科研 CLI 支持 CSV/Parquet 二分类、训练集 EDA、真实基线、可证伪假设、受控实验、统计审查、反馈迭代与一次性封存测试，输出 JSON/Markdown 报告。当前 Web 首页使用通用研究控制器。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\deploy-research.ps1
 ```
 
 脚本安装 Python 依赖、生成离线合成数据并运行 Mock 研究决策与真实科学计算，不需要 Node.js、GPU 或云密钥。产物位于新建的 `runs/<run_id>/`；Mock 模式不会被标为真实 LLM 研究成果。详见 [表格研究部署与复现](docs/SCIENCE_DEPLOYMENT.md) 和 [角色工作流](docs/SCIENCE_WORKFLOW.md)。验收证据与双模型冒烟见 [终验收报告](docs/P0_ACCEPTANCE_REPORT.md)（云端规划 + 本地候选排序冒烟已通过），进度与验证记录见 [PROGRESS.md](PROGRESS.md)。
+
+以下模式对应旧演示入口 `/runs`。通用研究控制器需要至少配置一个模型端点。
 
 | 模式 | 配置 | 执行方式 |
 | --- | --- | --- |
@@ -145,7 +147,7 @@ npm.cmd --prefix web run build
 
 `task.json` 来自解压后的研究包。同一配置下复跑会创建新任务，启用模型时可再次调用。恢复则从已有检查点继续，并复用已落盘的候选结果。
 
-## API 与扩展
+## 旧演示 API 与扩展
 
 | 接口 | 用途 |
 | --- | --- |
@@ -158,7 +160,7 @@ npm.cmd --prefix web run build
 - 通过 [ResearchAdapter](lazyresearch/adapters.py) 定义工具、证据和验证标准。通过 `Runner(adapters=...)` 注册适配器。工具需遵守传入的时限，并用操作 ID 保证重试幂等。到达时限时运行器停止等待。
 - 通过 [ModelGateway](lazyresearch/model_gateway.py) 接入兼容供应商。网关负责请求、用量与保守 token 预估。自定义 `Runner` 可传入 `create_app(runner=...)`。
 
-## LangGraph 编排流程图
+## 旧演示的 LangGraph 编排流程图
 
 下图对应 [工作流源码](lazyresearch/workflow.py)。主图有两条回路。同一轮内可继续派发候选，验证后可依据证据修正并开启下一轮。
 
@@ -221,6 +223,26 @@ flowchart TD
 
 工作台首页现使用 /research/runs 接口调用通用研究引擎。支持整数数列、CPU 成员查询基准和上传 CSV 的二分类研究，预算覆盖模型调用、输入输出 token、实验次数和运行时间。旧 /runs 接口保留用于历史演示记录。
 
-运行过程每秒同步模型请求、委派、实验、验证和修正。可停止任务，刷新页面可恢复查看。模型或验证失败会显示停止或证据不足状态。CSV 比较在验证集上进行，结论报告探索性范围。
+运行过程每秒同步模型请求、委派、实验、验证和修正。进度和报告以中文摘要展示验证范围、关键指标和失败原因。研究包包含原始决策、事件和实验 JSON。CSV 比较在验证集上进行，结论报告探索性范围。
 
-每项任务保存于 .lazyresearch/research/<任务 ID>/，report.md 随事件立即追加，registry.sqlite 保存结构化状态。实时报告可通过 /research/runs/<任务 ID>/report 查看，终态可下载包含配置、报告、模型记录、CSV 输入与实验原始结果的研究包。服务重启后，已运行的中断任务会明确标记停止，排队任务继续执行。
+在同一个窗口，任务结束后输入新目标并点 **研究**，新一次运行会继承已有附件，参考上一轮结果和当前对话记忆。**对话** 使用本地模型，按当前阶段或轮次回答。右上角 **新建研究** 开启独立窗口记忆。模型调用总数默认用 `—` 表示无次数上限，云端请求次数仍可限制。Token、实验次数和时间额度继续生效。
+
+完整 Favorita 数据包会进入预测参数搜索。决策 Agent 每轮读取实际开发折 RMSLE、已试参数和失败反馈，再提出新的训练窗口、聚合方法和促销设置。预算允许时按设定轮次探索，预留一次实验给最终独立验证。重复提案会退回重选。模型调用失败或仍重复时，程序用尚未试过的参数补选，并在进度中注明。提交文件使用开发折 RMSLE 最低的方案。
+
+每次运行保存于 `.lazyresearch/research/<任务 ID>/`。`report.md` 随事件追加，`registry.sqlite` 保存结构化状态。同一窗口的对话保存在首个运行的 SQLite 中。刷新可恢复当前运行和窗口对话，之前的研究可从历史列表打开。服务重启后，已运行的中断任务会明确标记停止，排队任务继续执行。
+
+### 扩展研究工具
+
+每次通用研究开始时读取 [工具配置](configs/tools.toml)，按任务材料筛选工具。可将新的通用计算保存为 [工具目录](lazyresearch/tools) 中的 Python 模块，并登记配置后在下一次研究复用。
+
+```toml
+[tools.my_check]
+material = "csv_files"
+label = "自定义 CSV 检查"
+purpose = "说明工具需要的输入和可验证的输出。"
+module = "my_check"
+schema = "Arguments"
+function = "run"
+```
+
+`material` 使用任务已有材料标记，例如 `csv_files`、`sequence` 或 `domain`。`schema` 是 Pydantic 参数模型，`function` 接收 `(root, task, args)`，返回可序列化的观测字典。自定义中文展示字段可放在 `display_fields`，每项包含 `label` 和 `value`。工具仍由本机限时子进程执行。项目维护者可把新课题中验证过的计算提炼到工具目录并登记，Agent 随后的运行自动发现和调用已登记工具。

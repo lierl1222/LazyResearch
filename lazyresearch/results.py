@@ -1,17 +1,15 @@
 """Materialize the user-facing result from recorded evidence, including partial runs."""
-import json
 import uuid
+import json
+
+from .presentation import (STATUSES, chinese_text, display_references, explain_reason,
+                           observation_title, present_events, present_outcome)
 
 
-def result_markdown(registry, report):
+def result_markdown(registry, report, *, save=False):
     if not report:
         return ""
-    path = registry.root / "result.md"
-    if path.exists():
-        return path.read_text(encoding="utf8")
-    states = {"reported":"已完成", "stopped":"已停止", "failed":"失败",
-              "unsupported":"缺少可用工具", "inconclusive":"证据不足"}
-    lines = ["# 研究结果", "", "运行状态：" + states.get(report["status"], report["status"]), ""]
+    lines = ["# 研究结果", "", "运行状态：" + STATUSES.get(report["status"], report["status"]), ""]
     benchmark = registry.root / "benchmark.json"
     if benchmark.exists():
         data = json.loads(benchmark.read_text(encoding="utf8"))
@@ -23,21 +21,38 @@ def result_markdown(registry, report):
         lines += [f"训练截止 {score['train_end']}，验证截止 {score['validation_end']}，共 {score['validation_rows']:,} 条验证记录。",
                   f"预测文件 submission.csv 共 {data['prediction_rows']:,} 行。", ""]
     evidence = dict(report.get("evidence") or {})
-    for e in registry.get("events") or []:
-        if e.get("observation_id") and e.get("outcome"):
+    task = registry.get("task") or {}
+    files = task.get("files", [])
+    displays = {}
+    for e in present_events(registry.get("events") or [], files):
+        if e["stage"] == "validation" and e.get("observation_id") and e.get("outcome"):
             evidence.setdefault(e["observation_id"], e["outcome"])
+            displays[e["observation_id"]] = e["display"]
     if evidence:
         lines += ["## 实验记录", ""]
         for ref, observation in evidence.items():
-            values = {k:v for k,v in observation.items() if k not in {
-                "cpu_seconds","elapsed_seconds","wall_seconds","config_hash","run_id","experiment_id"}}
-            lines += [f"- {ref} · " + json.dumps(values,ensure_ascii=False)]
+            display = displays.get(ref)
+            if display:
+                title, summary, fields = display["title"], display["summary"], display["fields"]
+            else:
+                title = observation_title(ref)
+                summary, fields = present_outcome(observation, files)
+            lines += [f"- {title} · {summary}"]
+            lines += [f"  - {row['label']}：{row['value']}" for row in fields]
     elif not benchmark.exists():
         lines += ["本次运行没有记录到可验证的实验结果。"]
     if report.get("summary"):
-        lines += ["", "## 运行说明", "", report["summary"]]
+        summary = report["summary"]
+        if report["status"] in {"failed", "stopped"}:
+            summary = explain_reason(summary)
+        else:
+            summary = chinese_text(summary, STATUSES[report["status"]] + "，详见上方实验记录。")
+        summary = display_references(summary, {ref: display["title"] for ref, display in displays.items()})
+        lines += ["", "## 运行说明", "", summary]
     content = "\n".join(lines).rstrip() + "\n"
-    temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
-    temporary.write_text(content, encoding="utf8")
-    temporary.replace(path)
+    if save:
+        path = registry.root / "result.md"
+        temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
+        temporary.write_text(content, encoding="utf8")
+        temporary.replace(path)
     return content

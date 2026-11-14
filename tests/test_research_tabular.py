@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from lazyresearch.science.data import generate_demo
 from lazyresearch.research_service import Submission, ResearchService
-from lazyresearch.research_tools import profile, tabular, Profile, Tabular
+from lazyresearch.tools.table import profile, tabular, Profile, Tabular
 from lazyresearch.configuration import ModelConfig
 
 class TabularIntegrationTests(unittest.TestCase):

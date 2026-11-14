@@ -13,6 +13,7 @@ from pydantic import Field, model_validator
 
 from .session import workflow
 from .research import Task, research, append_report
+from .presentation import present_events
 from .results import result_markdown
 from .science.budget import BudgetGovernor
 from .science.gateway import ScienceGateway
@@ -21,6 +22,7 @@ from .science.schemas import TaskConfig, DatasetConfig
 
 
 class Submission(Task):
+    previous_run_id: str | None = None
     file_ids: list[str] = Field(default_factory=list, max_length=12)
     csv_text: str = Field(default="", max_length=2_000_000)
     target: str = ""
@@ -31,7 +33,7 @@ class Submission(Task):
     def materials(self):
         if self.tabular_config:
             raise ValueError("网页任务请上传 CSV")
-        if not (self.sequence or self.cpu_benchmark or self.csv_text or self.domain or self.file_ids):
+        if not (self.previous_run_id or self.sequence or self.cpu_benchmark or self.csv_text or self.domain or self.file_ids):
             raise ValueError("请提供数列、CPU 基准或 CSV 数据")
         if self.csv_text and not self.target:
             raise ValueError("CSV 研究需要指定目标列")
@@ -112,21 +114,37 @@ class ResearchService:
 
     def create(self, submission):
         id = uuid.uuid4().hex
-        files = []
+        previous = self.registry(submission.previous_run_id) if submission.previous_run_id else None
+        if previous and not previous.get("report"):
+            raise HTTPException(409, "上一轮研究正在运行，请在结束或停止后继续")
+        prior = previous.get("task") if previous else {}
+        files = list(prior.get("files", []))
+        existing_ids = {f["id"] for f in files}
         for key in dict.fromkeys(submission.file_ids):
+            if key in existing_ids:
+                continue
             if not re.fullmatch(r"[a-f0-9]{32}", key):
                 raise HTTPException(422, "文件引用无效")
             meta = self.root / "uploads" / key / "meta.json"
             if not meta.exists():
                 raise HTTPException(422, "文件不存在")
             files.append(json.loads(meta.read_text(encoding="utf8")))
+        if len(files) > 12:
+            raise HTTPException(422, "一个研究窗口最多继承并使用 12 个附件")
         registry = Registry(self.root / id)
-        material = Task.model_validate(submission.model_dump(exclude={"file_ids", "csv_text", "target", "positive_label", "forbidden_features"})).model_dump()
+        material = Task.model_validate(submission.model_dump(include=set(Task.model_fields))).model_dump()
+        registry.put("conversation", {"id": self.memory(previous).root.name if previous else id,
+                                      "previous_run_id": submission.previous_run_id})
+        for field in ("sequence", "cpu_benchmark", "target_speedup", "seed", "domain", "tabular"):
+            if field in prior and (field not in submission.model_fields_set or field == "tabular"):
+                material[field] = prior[field]
         if files:
             inputs = registry.root / "inputs"
             inputs.mkdir()
             for f in files:
-                shutil.copyfile(self.root / "uploads" / f["id"] / "content", inputs / f["id"])
+                source = (previous.root / "inputs" / f["id"] if f["id"] in existing_ids
+                          else self.root / "uploads" / f["id"] / "content")
+                shutil.copyfile(source, inputs / f["id"])
             material["files"] = files
             material["favorita_files"] = {"train.csv","test.csv","sample_submission.csv"} <= {f["name"] for f in files}
             material["csv_files"] = any(f["name"].lower().endswith(".csv") for f in files)
@@ -136,17 +154,57 @@ class ResearchService:
             path.write_text(submission.csv_text, encoding="utf-8")
             material["tabular"] = TaskConfig(dataset=DatasetConfig(path=str(path.resolve()), target=submission.target,
                 positive_label=submission.positive_label, forbidden_features=submission.forbidden_features)).model_dump()
+        elif material.get("tabular") and previous:
+            path = registry.root / "input.csv"
+            shutil.copyfile(previous.root / "input.csv", path)
+            material["tabular"]["dataset"]["path"] = str(path.resolve())
         registry.put("task", material)
         registry.put("state", {"status": "queued"})
         self.emit(registry, "queued", status="queued")
         return id
+
+    def memory(self, registry):
+        conversation = registry.get("conversation") or {}
+        id = conversation.get("id", registry.root.name)
+        return registry if id == registry.root.name else self.registry(id)
+
+    def history(self, registry, *, limit=None):
+        history = []
+        previous_id = (registry.get("conversation") or {}).get("previous_run_id")
+        while previous_id and (limit is None or len(history) < limit):
+            previous = self.registry(previous_id)
+            report = previous.get("report") or {}
+            entry = {"id": previous_id, "goal": previous.get("task")["goal"], "status": report.get("status")}
+            if limit is not None:
+                entry["summary"] = report.get("summary", "")
+                entry["evidence"] = report.get("evidence", {})
+                for event in previous.get("events") or []:
+                    if event["stage"] == "validation" and event.get("observation_id") and event.get("outcome"):
+                        entry["evidence"].setdefault(event["observation_id"], event["outcome"])
+            history.append(entry)
+            previous_id = (previous.get("conversation") or {}).get("previous_run_id")
+        return list(reversed(history))
+
+    def recent_research(self, registry):
+        history = self.history(registry, limit=2)
+        for entry in history:
+            entry["goal"] = entry["goal"][:600]
+            entry["summary"] = entry["summary"][:800]
+            entry["evidence"] = [
+                {"id": key, "observation": json.dumps(value, ensure_ascii=False)[:480]}
+                for key, value in list(entry["evidence"].items())[-5:]
+            ]
+        return history
 
     def emit(self, registry, stage, **details):
         with registry.transaction() as db:
             events = registry.get_from(db, "events", "current") or []
             events.append({"id": len(events) + 1, "stage": stage, **details})
             registry.put_into(db, "events", "current", events)
-        append_report(registry.root, stage, details)
+            material = registry.get_from(db, "task", "current") or {}
+        files = material.get("files", [])
+        display = present_events(events, files)[-1]["display"] if stage == "plan" else None
+        append_report(registry.root, stage, details, files=files, display=display)
 
     def run(self, id):
         registry = self.registry(id)
@@ -161,12 +219,13 @@ class ResearchService:
             try:
                 report = research(task, material, registry,
                     self.gateway_factory(self.config, registry, budget, allow_reporting=True), budget,
-                    lambda stage, **details: self.emit(registry, stage, **details))
+                    lambda stage, **details: self.emit(registry, stage, **details),
+                    previous_research=self.recent_research(registry), memory=self.memory(registry))
             except Exception as error:
                 report = {"status": "failed", "summary": type(error).__name__, "evidence": {},
                           "delegations": [], "budget": budget.snapshot()}
             registry.put("report", report)
-            result_markdown(registry, report)
+            result_markdown(registry, report, save=True)
             registry.put("state", {"status": report["status"]})
             self.emit(registry, "finished", status=report["status"], summary=report["summary"])
 
@@ -184,7 +243,7 @@ class ResearchService:
                 report = {"status": "stopped", "summary": "服务重启导致任务中断，请创建新任务。", "evidence": {},
                           "delegations": []}
                 registry.put("report", report)
-                result_markdown(registry, report)
+                result_markdown(registry, report, save=True)
                 self.emit(registry, "finished", status="stopped", summary=report["summary"])
 
     def snapshot(self, id):
@@ -213,11 +272,13 @@ class ResearchService:
         budget["by_model"] = usage
         budget["cloud_requests"] = usage["cloud"]["calls"]
         events = registry.get("events") or []
+        events = present_events(events, task.get("files", []))
+        memory = self.memory(registry)
         status = report["status"] if report else registry.get("state")["status"]
         if report and report.get("budget") and "discussions" not in (registry.get("budget") or {}):
             budget["wall_seconds"] = report["budget"]["wall_seconds"]
-        return {"id": id, "conversation_id": id, "result": result_markdown(registry, report), "workflow": workflow(events, status),
-                "exchanges": registry.list("exchanges"), "task": task, "status": report["status"] if report else registry.get("state")["status"],
+        return {"id": id, "conversation_id": memory.root.name, "result": result_markdown(registry, report), "workflow": workflow(events, status),
+                "research_history": self.history(registry), "exchanges": memory.list("exchanges"), "task": task, "status": status,
                 "elapsed": budget.get("wall_seconds", 0), "budget": budget, "events": events, "report": report}
 
     def bundle(self, id):
@@ -233,7 +294,7 @@ class ResearchService:
             for name in ("submission.csv","benchmark.json"):
                 if (registry.root / name).is_file():
                     archive.write(registry.root / name, name)
-            archive.writestr("memory.json", json.dumps(registry.list("exchanges"), ensure_ascii=False))
+            archive.writestr("memory.json", json.dumps(self.memory(registry).list("exchanges"), ensure_ascii=False))
             for f in registry.get("task").get("files", []):
                 archive.write(registry.root / "inputs" / f["id"], "inputs/" + f["id"] + "/" + f["name"])
             for path in (registry.root / "workers").glob("*.json"):

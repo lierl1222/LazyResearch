@@ -23,6 +23,14 @@ class UserStopped(RuntimeError):
     pass
 
 
+class ModelContextExceeded(RuntimeError):
+    pass
+
+
+class ModelOutputTruncated(RuntimeError):
+    pass
+
+
 class ScienceGateway:
     def __init__(self, config, registry, budget, transport=None, *, allow_reporting=False):
         self.config, self.registry, self.budget = config, registry, budget
@@ -92,6 +100,12 @@ class ScienceGateway:
             async def request():
                 async with httpx.AsyncClient(timeout=deadline, trust_env=role != "local" and endpoint.use_system_proxy, transport=self.transport) as client:
                     response = await client.post(endpoint.base_url + "/chat/completions", headers=headers, json=body)
+                    if response.status_code in {400, 413, 422} and role == "local":
+                        message = response.text[:2000].lower()
+                        if ("context_length_exceeded" in message
+                                or "exceeds the available context size" in message
+                                or "maximum context length" in message):
+                            raise ModelContextExceeded()
                     response.raise_for_status()
                     return response.json()
             async def bounded():
@@ -99,7 +113,7 @@ class ScienceGateway:
                 expires = time.monotonic() + deadline
                 try:
                     while not pending.done():
-                        if (self.registry.root / "stop.requested").exists():
+                        if self.budget.stop_requested():
                             raise UserStopped("user_stop")
                         remaining = expires - time.monotonic()
                         if remaining <= 0:
@@ -113,7 +127,13 @@ class ScienceGateway:
             payload = asyncio.run(bounded())
             usage = payload.get("usage") or {}
             input_usage, output_usage = usage.get("prompt_tokens"), usage.get("completion_tokens")
-            decision = schema.model_validate_json(payload["choices"][0]["message"]["content"])
+            choice = payload["choices"][0]
+            try:
+                decision = schema.model_validate_json(choice["message"]["content"])
+            except ValueError as error:
+                if choice.get("finish_reason") == "length":
+                    raise ModelOutputTruncated() from error
+                raise
             record = {"id": id, "role": role, "model": endpoint.model, "status": "completed", "decision": decision.model_dump()}
         except Exception as error:
             # Avoid recording provider response bodies or authentication details.

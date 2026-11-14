@@ -199,3 +199,16 @@ header .pixel-round-logo { width:58px;height:58px;flex-basis:58px;background:url
 .metric-pixel{display:inline-block;width:8px;height:8px;margin-right:8px;background:#edc25d;border:1px solid #65532c;box-shadow:2px 2px #93856a}.settings-scroll .metric-pixel{background:#9cbb80}
 
 .usage-card .usage-split{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:6px;font-size:12px;color:#554c39}.usage-split strong{font-variant-numeric:tabular-nums}
+.new-research {
+  background:#302d34;color:#ffda5a;border:2px solid #26242a;
+  box-shadow:3px 3px 0 #b1aa97;padding:7px 12px;font-weight:700;
+}
+.new-research:hover:enabled {background:#494139}
+.evidence-row {display:block;border-left:2px solid #c9ab61;margin-bottom:6px;padding-left:8px}
+.evidence-row strong {white-space:normal}
+.evidence-row small {overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.observation-fields {margin:10px 0 14px}
+.observation-fields div {display:grid;grid-template-columns:minmax(85px,auto) 1fr;gap:8px;margin:4px 0}
+.observation-fields dt {font-weight:650}
+.observation-fields dd {margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.research-history {margin:0 0 14px;padding:7px 10px;background:#fbf5df}

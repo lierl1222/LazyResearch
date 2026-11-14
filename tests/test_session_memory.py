@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from lazyresearch.api import create_app
 from lazyresearch.configuration import ModelConfig
 from lazyresearch.research_service import ResearchService, Submission
-from lazyresearch.research_tools import ReadMaterial, read_material
+from lazyresearch.tools.materials import ReadMaterial, read_material
 from lazyresearch.science.gateway import ScienceGateway
 
 

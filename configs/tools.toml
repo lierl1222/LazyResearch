@@ -1,0 +1,88 @@
+# 每次研究开始时重新加载。module 相对于 lazyresearch.tools。
+[tools.favorita_candidate]
+material = "favorita_files"
+label = "Favorita 开发折回测"
+purpose = "用指定的训练窗口、工作日聚合方法和促销设置回测 Favorita 销量，RMSLE 越低越好。"
+module = "forecasting"
+schema = "ForecastParameters"
+function = "favorita_candidate"
+
+[tools.inspect_csv]
+material = "csv_files"
+label = "检查 CSV 数据"
+purpose = "检查上传 CSV 的列、类型、缺失值与重复行，再选择目标列。"
+module = "forecasting"
+schema = "InspectCSV"
+function = "inspect_csv"
+
+[tools.forecast_backtest]
+material = "csv_files"
+label = "时间序列回测"
+purpose = "在时间留出折比较工作日预测和季节朴素基线。需要实际观测的数值目标。fold=1 为开发，fold=0 为最后一折。"
+module = "forecasting"
+schema = "Forecast"
+function = "backtest"
+
+[tools.test_polynomial]
+material = "domain"
+label = "验证材料中的数列"
+purpose = "用材料给出的整数检查多项式。"
+module = "sequence"
+schema = "SuppliedPolynomial"
+function = "supplied_sequence"
+
+[tools.benchmark_membership]
+material = "domain"
+label = "CPU 成员查询基准"
+purpose = "在固定随机工作负载上检验成员查询的正确性及耗时。"
+module = "cpu"
+schema = "Benchmark"
+function = "membership"
+
+[tools.read_material]
+material = "domain"
+label = "读取研究材料"
+purpose = "读取来源文件或研究目标的片段，也可查找字面引用。"
+module = "materials"
+schema = "ReadMaterial"
+function = "read_material"
+
+[tools.uploaded_table]
+material = "csv_files"
+label = "CSV 分类实验"
+purpose = "用指定的目标列和正类评估上传文件中的分类任务。"
+module = "table"
+schema = "UploadedTable"
+function = "uploaded_table"
+
+[tools.table_profile]
+material = "tabular"
+label = "分析训练数据"
+purpose = "检查训练数据和可用特征。"
+module = "table"
+schema = "Profile"
+function = "profile"
+
+[tools.sequence]
+material = "sequence"
+label = "验证给定数列"
+purpose = "下标从零开始，按升幂系数验证多项式。"
+module = "sequence"
+schema = "Polynomial"
+function = "sequence"
+
+[tools.membership]
+material = "cpu_benchmark"
+label = "CPU 成员查询基准"
+purpose = "在固定随机输入上与列表基线比较成员查询。"
+module = "cpu"
+schema = "Benchmark"
+function = "membership"
+
+[tools.tabular]
+material = "tabular"
+label = "表格分类实验"
+purpose = "在验证集上将候选分类器与逻辑回归基线比较。"
+module = "table"
+schema = "Tabular"
+function = "tabular"

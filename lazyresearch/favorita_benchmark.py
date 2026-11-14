@@ -14,6 +14,12 @@ from .science.registry import Registry
 
 def benchmark(root, task=None):
     task = task or Registry(root).get("task")
+    saved = root / "benchmark.json"
+    if saved.exists():
+        previous = json.loads(saved.read_text(encoding="utf8"))
+        if any("parameters" in trial for trial in previous["development"]):
+            locked = Forecast.model_validate(previous["selected"])
+            return finalize(root, task, locked, previous["development"])
     files = {f["name"]:f["id"] for f in task["files"]}
     params = dict(file_id=files["train.csv"], date="date", target="sales", groups=["store_nbr","family"], horizon=16)
     trials = []
@@ -26,6 +32,12 @@ def benchmark(root, task=None):
         trials.append(trial)
     best = min(trials,key=lambda t:t["candidate"])
     locked = Forecast(**params,weeks=best["weeks"],promotion=best["promotion"],fold=0)
+    return finalize(root, task, locked, trials, started)
+
+
+def finalize(root, task, locked, trials, started=None):
+    started = perf_counter() if started is None else started
+    files = {f["name"]:f["id"] for f in task["files"]}
     final = backtest(root,task,locked)
     test = pd.read_csv(root/"inputs"/files["test.csv"],parse_dates=["date"])
     train = pd.read_csv(root/"inputs"/files["train.csv"],parse_dates=["date"])
