@@ -102,6 +102,8 @@ class ScienceGateway:
                     if candidates else {"type": "string", "maxLength": 0})
                 shape["properties"]["action"] = ({"enum": ["continue", "stop"]}
                     if candidates else {"const": "stop"})
+            if schema.__name__ == "CandidateChoice" and context.get("candidates"):
+                shape["properties"]["candidate"] = {"type": "string", "enum": list(context["candidates"])}
             body["temperature"] = 0
             body["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": schema.__name__, "schema": shape}}

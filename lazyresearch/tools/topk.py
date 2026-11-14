@@ -94,14 +94,29 @@ def search(task,material,registry,budget,emit,result,evidence,ask=None):
             label = next(iter(candidates))
             hypothesis = label
             if ask:
-                choice = ask(f'topk-director-{turn}',
-                    '根据真实开发集结果与独立评审选择下一个尚未执行的候选。candidate 必须来自 candidates。'
-                    '优先保证正确性，再最大化强基线加速比，解释选择理由。',
-                    {'goal': task.goal, 'candidates': list(candidates), 'observations': evidence,
-                     'reviews': registry.list('research_reviews')[-3:]}, CandidateChoice)
-                if choice.candidate not in candidates:
-                    raise RuntimeError('决策模型选择了已尝试或不存在的 Top-K 候选')
-                label, hypothesis = choice.candidate, choice.hypothesis
+                instruction = ('根据真实开发集结果与独立评审选择下一个尚未执行的候选。candidate 必须来自 candidates。'
+                               '优先保证正确性，再最大化强基线加速比，解释选择理由。')
+                context = {'goal': task.goal, 'candidates': list(candidates), 'observations': evidence,
+                           'reviews': registry.list('research_reviews')[-3:]}
+                choice = None
+                for attempt in ("", "-repair"):
+                    try:
+                        choice = ask(f'topk-director-{turn}{attempt}', instruction, context, CandidateChoice,
+                                     complex_step=bool(attempt))
+                    except BudgetExceeded:
+                        raise
+                    except RuntimeError:
+                        break
+                    if choice.candidate in candidates:
+                        break
+                    context = {**context, "rejected_candidate": choice.candidate}
+                    instruction += (f" 刚才选择了无效候选 {choice.candidate!r}，它不在剩余 candidates 中。"
+                                    "必须从剩余 candidates 里选择一个。")
+                if choice and choice.candidate in candidates:
+                    label, hypothesis = choice.candidate, choice.hypothesis
+                else:
+                    emit("revision", round=turn,
+                         summary=f"本机补选 · 决策 Agent 未给出有效候选，按顺序测试 {label}。")
             source = candidates.pop(label)
             emit("hypothesis",round=turn,summary=hypothesis)
             out=trial(label,source,"dev",turn)

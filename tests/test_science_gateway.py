@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -6,6 +8,7 @@ from lazyresearch.science.budget import BudgetGovernor
 from lazyresearch.science.registry import Registry
 from lazyresearch.science.schemas import ScienceBudget
 from lazyresearch.science.gateway import ScienceGateway, Selection
+from lazyresearch.tools.topk import CandidateChoice
 
 
 def test_actual_usage_and_decision_cached(tmp_path):
@@ -123,3 +126,23 @@ def test_local_model_selects_next_executable_hypothesis(tmp_path):
     assert update["next_template"] == "class_imbalance"
     assert runner.registry.get("model_calls", "director-1-local")["role"] == "local"
     assert "review-e1" in runner.registry.get("hypotheses", "h-class_imbalance")["observations"]
+
+
+def test_local_candidate_choice_constrained_to_candidates(tmp_path):
+    registry = Registry(tmp_path)
+    budget = BudgetGovernor(registry, ScienceBudget())
+    config = ModelConfig.model_validate({"local": {"enabled": True,
+                                                   "base_url": "http://127.0.0.1:11434/v1", "model": "qwen"}})
+    captured = {}
+
+    def handle(request):
+        body = json.loads(request.content)
+        captured["schema"] = body["response_format"]["json_schema"]["schema"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"candidate":"a","hypothesis":"try a"}'}}],
+                                         "usage": {"prompt_tokens": 5, "completion_tokens": 5}})
+
+    gateway = ScienceGateway(config, registry, budget, transport=httpx.MockTransport(handle))
+    decision = gateway.ask("local", "topk-pick", "pick one", {"candidates": ["a", "b"], "goal": "g"},
+                           CandidateChoice)
+    assert decision.candidate == "a"
+    assert captured["schema"]["properties"]["candidate"]["enum"] == ["a", "b"]
