@@ -6,3 +6,6 @@ models.toml
 .lazyresearch/
 node_modules/
 dist/
+runs/
+data/synthetic_demo.csv
+.pytest_cache/

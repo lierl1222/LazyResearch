@@ -4,6 +4,16 @@ LazyResearch 是面向研究场景的本地工作台。LangGraph 编排规划、
 
 ## 运行模式
 
+### 表格研究 G0 / P0
+
+业务任务书见 [RESEARCH_AGENT_GOALS.md](docs/RESEARCH_AGENT_GOALS.md)，融合范围见 [P0_IMPLEMENTATION.md](docs/P0_IMPLEMENTATION.md)。科学研究入口支持 CSV/Parquet 二分类、训练集 EDA、真实基线、可证伪假设、受控实验、统计审查、反馈迭代与一次性封存测试。现有 Web 保留通用 fixture 工作台；表格研究通过 CLI 和 JSON/Markdown 报告交付，Streamlit 迁移属于 P1。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\deploy-research.ps1
+```
+
+脚本安装 Python 依赖、生成离线合成数据并运行 Mock 研究决策与真实科学计算，不需要 Node.js、GPU 或云密钥。产物位于新建的 `runs/<run_id>/`；Mock 模式不会被标为真实 LLM 研究成果。详见 [表格研究部署与复现](docs/SCIENCE_DEPLOYMENT.md) 和 [角色工作流](docs/SCIENCE_WORKFLOW.md)。验收证据与双模型冒烟见 [终验收报告](docs/P0_ACCEPTANCE_REPORT.md)（云端规划 + 本地候选排序冒烟已通过），进度与验证记录见 [PROGRESS.md](PROGRESS.md)。
+
 | 模式 | 配置 | 执行方式 |
 | --- | --- | --- |
 | 本地规则 | 保持模板默认值 | 适配器完成全部流程，便于验证部署 |

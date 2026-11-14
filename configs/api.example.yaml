@@ -1,0 +1,27 @@
+project_name: lazyresearch-api
+dataset:
+  path: ../data/synthetic_demo.csv
+  format: csv
+  target: y
+  positive_label: 1
+  forbidden_features: [duration]
+objective:
+  description: 预测客户响应倾向，在给定预算内验证可证伪假设，不推断因果增量。
+  top_fraction: 0.2
+validation:
+  random_seed: 42
+  bootstrap_samples: 100
+budget:
+  max_llm_input_tokens: 40000
+  max_llm_output_tokens: 6000
+  max_llm_calls: 4
+  max_experiments: 8
+  max_wall_time_seconds: 240
+  max_single_experiment_seconds: 40
+  max_cpu_seconds: 150
+research:
+  max_hypotheses: 4
+  no_improvement_patience: 3
+llm:
+  provider: configured_api
+  allow_mock: false

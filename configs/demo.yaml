@@ -1,0 +1,22 @@
+project_name: lazyresearch-demo
+dataset:
+  path: ../data/synthetic_demo.csv
+  format: csv
+  target: y
+  positive_label: 1
+  forbidden_features: [duration]
+objective:
+  primary_metric: average_precision
+  top_fraction: 0.2
+validation:
+  strategy: stratified_holdout
+  random_seed: 42
+budget:
+  max_llm_calls: 0
+  max_experiments: 8
+  max_wall_time_seconds: 180
+  max_single_experiment_seconds: 30
+  max_cpu_seconds: 120
+llm:
+  provider: mock
+  allow_mock: true

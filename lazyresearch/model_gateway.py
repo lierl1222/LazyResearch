@@ -47,6 +47,8 @@ class Endpoint(Record):
     input_overhead_tokens: int = Field(default=256, ge=0, le=65536)
     json_output: bool = False
     disable_thinking: bool = False
+    input_price_per_million: float | None = Field(default=None, ge=0)
+    output_price_per_million: float | None = Field(default=None, ge=0)
 
     @field_validator("base_url")
     @classmethod
