@@ -36,6 +36,7 @@ Role = Literal["planning", "diagnosis"]
 
 
 class Endpoint(Record):
+    use_system_proxy: bool = True
     enabled: bool = False
     base_url: str = ""
     model: str = ""
@@ -94,7 +95,7 @@ class ChatGateway:
         if self.endpoint.disable_thinking:
             body["thinking"] = {"type": "disabled"}
         with httpx.Client(timeout=min(timeout, self.endpoint.timeout_seconds),
-                          trust_env=not self.local) as client:
+                          trust_env=not self.local and self.endpoint.use_system_proxy) as client:
             response = client.post(
                 self.endpoint.base_url + "/chat/completions", headers=headers,
                 json=body,

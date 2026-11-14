@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import mimetypes
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,9 +13,13 @@ from fastapi.staticfiles import StaticFiles
 from .configuration import load_model_config
 from .models import ResearchTask
 from .runner import Runner
+from .research_service import ResearchService, Submission
 
 
-def create_app(root: Path | None = None, *, runner: Runner | None = None) -> FastAPI:
+def create_app(root: Path | None = None, *, runner: Runner | None = None, research_service=None) -> FastAPI:
+    research_service = research_service or ResearchService(
+        (root or Path(os.environ.get("LAZYRESEARCH_DIR", ".lazyresearch"))) / "research",
+        load_model_config())
     runner = runner or load_model_config().runner(
         root or Path(os.environ.get("LAZYRESEARCH_DIR", ".lazyresearch")))
 
@@ -22,11 +27,51 @@ def create_app(root: Path | None = None, *, runner: Runner | None = None) -> Fas
     async def lifespan(app: FastAPI):
         with ThreadPoolExecutor(max_workers=1) as pool:
             app.state.pool = pool
+            for run_id in research_service.recover():
+                pool.submit(research_service.run, run_id)
             for run_id in runner.storage.pending():
                 pool.submit(runner.run, run_id)
             yield
 
     app = FastAPI(title="LazyResearch", lifespan=lifespan)
+
+    @app.get("/research/config")
+    def research_config():
+        endpoints = research_service.config
+        return {"mode": "research", "adapters": ["sequence", "cpu", "tabular"],
+                "models": {name: {"ready": bool(e.enabled and e.base_url and e.model)}
+                           for name, e in (("local", endpoints.local), ("cloud", endpoints.cloud))}}
+
+    @app.post("/research/runs", status_code=202)
+    def start_research(task: Submission):
+        if not any(e.enabled and e.base_url and e.model for e in
+                   (research_service.config.local, research_service.config.cloud)):
+            raise HTTPException(409, "请先配置至少一个模型端点")
+        id = research_service.create(task)
+        app.state.pool.submit(research_service.run, id)
+        return {"id": id}
+
+    @app.get("/research/runs/{id}")
+    def research_snapshot(id: str):
+        return research_service.snapshot(id)
+
+    @app.post("/research/runs/{id}/stop")
+    def stop_research(id: str):
+        registry = research_service.registry(id)
+        (registry.root / "stop.requested").touch()
+        return {"status": "stop_requested"}
+
+    @app.get("/research/runs/{id}/artifacts")
+    def research_artifacts(id: str):
+        return Response(research_service.bundle(id), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="research-{id}.zip"'})
+
+    @app.get("/research/runs/{id}/report")
+    def live_research_report(id: str):
+        registry = research_service.registry(id)
+        path = registry.root / "report.md"
+        return Response(path.read_text(encoding="utf-8") if path.exists() else "",
+                        media_type="text/plain", headers={"Cache-Control": "no-store"})
 
     @app.get("/config")
     def config():
@@ -87,5 +132,8 @@ def create_app(root: Path | None = None, *, runner: Runner | None = None) -> Fas
 
     frontend = Path(__file__).resolve().parents[1] / "web" / "dist"
     if frontend.is_dir():
+        # Windows registry overrides may otherwise serve modules as text/plain.
+        mimetypes.add_type("text/javascript", ".js")
+        mimetypes.add_type("text/css", ".css")
         app.mount("/", StaticFiles(directory=frontend, html=True), name="workbench")
     return app

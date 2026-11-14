@@ -68,7 +68,7 @@ class ScienceGateway:
         try:
             deadline = max(.001, min(endpoint.timeout_seconds, self.budget.remaining_time()))
             async def request():
-                async with httpx.AsyncClient(timeout=deadline, trust_env=role != "local", transport=self.transport) as client:
+                async with httpx.AsyncClient(timeout=deadline, trust_env=role != "local" and endpoint.use_system_proxy, transport=self.transport) as client:
                     response = await client.post(endpoint.base_url + "/chat/completions", headers=headers, json=body)
                     response.raise_for_status()
                     return response.json()

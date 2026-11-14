@@ -2,6 +2,7 @@
 import argparse
 import json
 import uuid
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -44,7 +45,19 @@ class Experiment(Record):
     arguments: dict = Field(default_factory=dict)
 
 
-def research(task, material, registry, gateway, budget):
+def append_report(root, stage, details):
+    """Append each completed event immediately so a running task is inspectable."""
+    path = Path(root) / "report.md"
+    timestamp = datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
+    with path.open("a", encoding="utf-8") as report:
+        report.write(f"\n## {timestamp} · {stage}\n\n")
+        report.write(json.dumps(details, ensure_ascii=False, indent=2) + "\n")
+        report.flush()
+
+
+def research(task, material, registry, gateway, budget, emit=None):
+    emit = emit or (lambda stage, **details: append_report(registry.root, stage, details))
+    emit("task", goal=task.goal, tools=[name for name, spec in TOOLS.items() if material.get(spec[0])])
     enabled = {k: v for k, v in TOOLS.items() if material.get(v[0])}
     catalog = {k: {"purpose": v[1], "arguments": v[2].model_json_schema()} for k, v in enabled.items()}
     evidence, reports = {}, []
@@ -53,6 +66,7 @@ def research(task, material, registry, gateway, budget):
         visible["tabular"] = material["tabular"]["objective"]
     context = {"goal": task.goal, "materials": visible, "tools": catalog}
     seen = set()
+    unavailable = set()
 
     def ask(id, instruction, details, schema, complex_step=False):
         cfg = gateway.config
@@ -60,23 +74,39 @@ def research(task, material, registry, gateway, budget):
         last_error = None
         for route in routes:
             endpoint = getattr(cfg, route)
-            if not (endpoint.enabled and endpoint.base_url and endpoint.model):
+            if route in unavailable or not (endpoint.enabled and endpoint.base_url and endpoint.model):
                 continue
             remaining = budget.snapshot()
             prompt = {**details, "remaining_seconds": int(budget.remaining_time()),
                       "remaining_calls": task.budget.max_llm_calls - remaining["llm_calls"],
                       "remaining_experiments": task.budget.max_experiments - remaining["experiment_count"]}
             try:
-                return gateway.ask(route, id + "-" + route, instruction, prompt, schema)
+                emit("model_request", role=route, request_id=id, model=endpoint.model)
+                decision = gateway.ask(route, id + "-" + route, instruction, prompt, schema)
+                emit("model", summary=f"{route}: {id}", model=endpoint.model)
+                return decision
             except BudgetExceeded:
                 raise
             except RuntimeError as error:
                 if (registry.root / "stop.requested").exists():
                     raise BudgetExceeded("user_stop") from error
                 last_error = error
+                emit("model", summary=f"{route}: {type(error).__name__}", reason=str(error))
+                if route == "local" and str(error) == "HTTPStatusError":
+                    unavailable.add(route)
+                if route == "cloud" and str(error) in {"ConnectError", "ReadTimeout"}:
+                    emit("model_request", role=route, request_id=id + "-retry", model=endpoint.model)
+                    try:
+                        return gateway.ask(route, id + "-cloud-retry", instruction, prompt, schema)
+                    except BudgetExceeded:
+                        raise
+                    except RuntimeError as retry_error:
+                        last_error = retry_error
+                        emit("model", summary="云端重试失败", reason=str(retry_error))
         raise RuntimeError(str(last_error) if last_error else "No configured model endpoint")
 
     def result(status, summary, citations=()):
+        emit("conclusion", status=status, summary=summary, citations=list(citations), budget=budget.snapshot())
         return {"status": status, "summary": summary, "citations": list(citations),
                 "evidence": evidence, "delegations": reports, "budget": budget.snapshot()}
 
@@ -89,8 +119,14 @@ def research(task, material, registry, gateway, budget):
                            "Specify complex reasoning only when justified. Finish when no useful experiment remains.")
             decision = ask(f"director-{turn}", instruction, {**context, "observations": evidence, "reports": reports,
                            "delegations_left": task.max_delegations - turn}, Direction, bool(reports and reports[-1]["stalled"]))
+            emit("plan", summary=decision.objective_or_conclusion, round=turn, decision=decision.model_dump())
             if any(ref not in evidence for ref in decision.evidence):
-                return result("inconclusive", "Director cited an unknown observation.")
+                decision = ask(f"director-{turn}-citation-repair",
+                    "Correct the evidence references in your decision. Use only exact observation IDs from observations. "
+                    "If finishing, cite observations supporting the conclusion. Return a corrected decision.",
+                    {**context, "observations": evidence, "invalid_decision": decision.model_dump()}, Direction)
+                if any(ref not in evidence for ref in decision.evidence):
+                    return result("inconclusive", "Director cited an unknown observation after correction.")
             if decision.action == "finish":
                 usable = any(evidence[r].get("verdict") in {"supported", "refuted", "inconclusive", "observed"} for r in decision.evidence)
                 return result("reported" if usable else "inconclusive", decision.objective_or_conclusion, decision.evidence)
@@ -111,6 +147,7 @@ def research(task, material, registry, gateway, budget):
                     report["limitations"] = worker.prediction_or_limitation
                     break
                 action = worker.model_dump()
+                emit("hypothesis", summary=worker.hypothesis_or_finding, prediction=worker.prediction_or_limitation, round=turn + 1)
                 try:
                     if worker.tool not in enabled:
                         raise ValueError("Tool unavailable for this material")
@@ -119,11 +156,16 @@ def research(task, material, registry, gateway, budget):
                     if signature in seen:
                         raise ValueError("Identical experiment already attempted. Revise or return.")
                     seen.add(signature)
+                    emit("execution", summary=worker.tool, arguments=args, round=turn + 1)
                     outcome = execute_isolated(registry, budget, id, execute_tool,
                                {"tool": worker.tool, "arguments": args, "task": material})
                 except ValueError as error:
                     outcome = {"error": str(error)[:500]}
                 evidence[id] = outcome
+                emit("validation", summary=outcome.get("verdict", outcome.get("error", "unknown")),
+                     observation_id=id, outcome=outcome, round=turn + 1)
+                if outcome.get("verdict") == "refuted" or outcome.get("error"):
+                    emit("revision", summary="验证反馈已交回子 Agent，由模型决定修正或汇报。", round=turn + 1)
                 history.append({"id": id, "action": action, "validation": outcome, "invalid": "error" in outcome})
                 if outcome.get("verdict"):
                     report["stalled"] = False
