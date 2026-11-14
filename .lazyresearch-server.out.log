@@ -1,0 +1,57 @@
+INFO:     127.0.0.1:49987 - "POST /research/runs HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:50013 - "GET /?research=f27415ee435146b9b59797c9aed44564 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /static/index-1XJCg8HR.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50013 - "GET /static/index-85i9I9fK.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50013 - "GET /assets/logo-pixel-simple.png HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50014 - "GET /assets/pixel-reference.png HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50014 - "GET /research/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/f27415ee435146b9b59797c9aed44564 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50014 - "GET /assets/mascot-typing-sheet.png HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50013 - "POST /research/runs HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "POST /research/runs/759706deae5144298ad26f312cf6d691/stop HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50142 - "GET /research/runs/8194941a68ee477ba242b05ba106dc77 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50585 - "GET /?research=759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50585 - "GET /static/index-OVLqusUQ.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50586 - "GET /static/index-85i9I9fK.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50586 - "GET /research/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50585 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54260 - "GET /research/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56142 - "GET /?research=759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56142 - "GET /static/index-gOaa8Yf4.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56143 - "GET /static/index-eFPxn_sm.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56142 - "GET /assets/pixel-reference.png HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56143 - "GET /assets/logo-pixel-simple.png HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56143 - "GET /research/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56142 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56187 - "GET /?research=759706deae5144298ad26f312cf6d691 HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56187 - "GET /research/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56188 - "GET /research/runs/759706deae5144298ad26f312cf6d691 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56262 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56262 - "GET /static/index-gOaa8Yf4.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56262 - "GET /static/index-eFPxn_sm.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56262 - "GET /research/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56361 - "POST /research/files?name=holidays_events.csv HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:56361 - "POST /research/files?name=holidays_events.csv HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:56646 - "POST /research/files?name=holidays_events.csv HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:58124 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58137 - "GET / HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:58137 - "GET /static/index-gOaa8Yf4.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:58138 - "GET /static/index-eFPxn_sm.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:58138 - "GET /assets/logo-pixel-simple.png HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:58137 - "GET /assets/pixel-reference.png HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:58137 - "GET /research/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60278 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60290 - "GET /research/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56385 - "GET /openapi.json HTTP/1.1" 200 OK
