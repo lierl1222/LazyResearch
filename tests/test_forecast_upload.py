@@ -12,21 +12,25 @@ from lazyresearch.forecast import Forecast, backtest
 
 
 class ForecastUploadTests(unittest.TestCase):
-    def test_zip_returns_separate_upload_references_and_rejects_bad_member(self):
+    def test_zip_keeps_binary_members_and_returns_one_attachment(self):
         with tempfile.TemporaryDirectory() as tmp, TestClient(create_app(Path(tmp))) as client:
             def upload(extra):
                 stream = io.BytesIO()
                 with zipfile.ZipFile(stream, "w") as archive:
                     archive.writestr("nested/train.csv","date,sales\n2020-01-01,2")
-                    archive.writestr(extra,b"id,sales\n1,0")
+                    for i in range(15):
+                        archive.writestr(f"note{i}.txt","hello")
+                    archive.writestr(extra,bytes([0,255,1]))
                 return client.post("/research/files?name=data.zip",content=stream.getvalue())
-            result = upload("test.csv")
+            result = upload("weights.bin")
             self.assertEqual(result.status_code,201)
-            self.assertEqual([f["name"] for f in result.json()["files"]],["train.csv","test.csv"])
-            uploads = Path(tmp)/"research"/"uploads"
-            before = set(uploads.iterdir())
-            self.assertEqual(upload("bad.exe").status_code,422)
-            self.assertEqual(before,set(uploads.iterdir()))
+            self.assertEqual(result.json()["name"],"data.zip")
+            import json
+            manifest = Path(tmp)/"research"/"uploads"/result.json()["id"]/"meta.json"
+            self.assertEqual(len(json.loads(manifest.read_text())["members"]),17)
+            member = json.loads(manifest.read_text())["members"][-1]
+            self.assertEqual(member["archive_path"], "weights.bin")
+            self.assertEqual((manifest.parent.parent/member["id"]/"content").read_bytes(), bytes([0,255,1]))
 
     def test_holdout_labels_cannot_affect_earlier_fold(self):
         with tempfile.TemporaryDirectory() as tmp:

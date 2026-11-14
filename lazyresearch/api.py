@@ -44,7 +44,7 @@ def create_app(root: Path | None = None, *, runner: Runner | None = None, resear
         for name, endpoint in (("local", endpoints.local), ("cloud", endpoints.cloud)):
             ready = bool(endpoint.enabled and endpoint.base_url and endpoint.model)
             models[name] = {"ready": ready, "model": endpoint.model if ready else None}
-        return {"mode": "research", "max_file_bytes": research_service.MAX_FILE_BYTES, "adapters": ["sequence", "cpu", "tabular"],
+        return {"mode": "research", "max_archive_bytes": research_service.MAX_ARCHIVE_BYTES, "max_file_bytes": research_service.MAX_FILE_BYTES, "adapters": ["sequence", "cpu", "tabular"],
                 "models": models}
 
     @app.post("/research/files", status_code=201)

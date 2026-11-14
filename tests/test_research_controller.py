@@ -101,7 +101,27 @@ class ResearchTests(unittest.TestCase):
             report = research(task, task.model_dump(), registry, gateway, budget)
             self.assertEqual(report["status"], "reported", report)
             self.assertEqual(report["budget"]["experiment_count"], 2)
-            self.assertEqual(report["budget"]["llm_calls"], 5)
+            self.assertEqual(report["budget"]["llm_calls"], 4)
+
+    def test_finish_is_provisional_while_distinct_trials_fit(self):
+        class Gateway:
+            config = ModelConfig(local={"enabled": True, "base_url": "http://fixture", "model": "test"})
+            def ask(self,role,id,instruction,context,schema):
+                if schema.__name__ == "Direction":
+                    return schema(action="finish",objective_or_conclusion="interim",
+                                  evidence=list(context["observations"]))
+                if context["history"]:
+                    return schema(action="return",hypothesis_or_finding="recorded",prediction_or_limitation="finite")
+                n=int(id.split("-")[1])
+                return schema(action="experiment",tool="sequence",arguments={"coefficients":[1,n]},
+                              hypothesis_or_finding="compare slope",prediction_or_limitation="finite")
+        with tempfile.TemporaryDirectory() as folder:
+            registry=Registry(Path(folder))
+            task=Task(goal="Compare slopes",sequence=[1,2,3],max_delegations=3,budget={"max_experiments":3})
+            report=research(task,task.model_dump(),registry,Gateway(),BudgetGovernor(registry,task.budget))
+            self.assertEqual(report["budget"]["experiment_count"],3)
+            self.assertEqual(len(report["evidence"]),3)
+            self.assertEqual(report["status"],"reported")
 
     def test_benchmark_returns_paired_timings(self):
         result = membership(None, {"seed":42,"target_speedup":1.2}, Benchmark(method="set"))
@@ -121,6 +141,10 @@ class ResearchTests(unittest.TestCase):
             def respond(request):
                 body = json.loads(request.content)
                 context = json.loads(body["messages"][1]["content"])
+                if "registry" in context:
+                    self.assertIn("read_material", context["registry"])
+                    decision = {"objective":"读取数据","tools":["read_material"]}
+                    return httpx.Response(200,json={"choices":[{"message":{"content":json.dumps(decision)}}]})
                 requests.append(context)
                 if len(requests) == 1:
                     decision = {"action": "delegate", "objective_or_conclusion": "读取数据"}

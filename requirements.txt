@@ -10,3 +10,4 @@ scipy>=1.14,<2
 pyarrow>=18,<27
 PyYAML>=6,<7
 pytest>=8,<10
+quickjs-ng==0.18.0.1

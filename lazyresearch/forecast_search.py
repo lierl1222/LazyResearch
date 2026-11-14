@@ -5,6 +5,7 @@ from typing import get_args
 
 from pydantic import Field
 
+from .iteration import stop_reason as iteration_limit
 from .model_context import compact_text
 from .presentation import explain_reason
 from .research_tools import execute_tool
@@ -39,6 +40,10 @@ def search_favorita(task, material, registry, budget, tool, ask, emit, evidence,
     for turn in range(candidate_limit):
         if budget.stop_requested():
             return result("stopped", explain_reason("user_stop"))
+        limit = iteration_limit(task,budget,turn,int(reserves_final))
+        if limit:
+            stop_reason = limit
+            break
         if budget.remaining_time() <= 0:
             stop_reason = explain_reason("wall_time_budget")
             break

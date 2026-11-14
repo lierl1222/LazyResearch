@@ -51,12 +51,14 @@ class ResearchService:
             raise HTTPException(404, "研究任务不存在")
         return Registry(self.root / id)
 
+    MAX_ARCHIVE_BYTES = 1024 ** 3
     MAX_FILE_BYTES = 160 * 1024 * 1024
 
-    async def upload_stream(self, name, blocks):
+    async def upload_stream(self, name, blocks, *, member=False):
         name = Path(name).name
-        if not name or len(name)>160 or Path(name).suffix.lower() not in {".csv",".txt",".md",".json",".tsv",".zip"}:
+        if not name or len(name)>160 or not member and Path(name).suffix.lower() not in {".csv",".txt",".md",".json",".tsv",".zip"}:
             raise HTTPException(422, "支持 UTF-8 CSV、TSV、TXT、MD、JSON 文件及其 ZIP 压缩包")
+        is_archive = not member and name.lower().endswith(".zip")
         key = uuid.uuid4().hex
         folder = self.root / "uploads" / key
         folder.mkdir(parents=True)
@@ -67,9 +69,9 @@ class ResearchService:
             with (folder / "content").open("wb") as out:
                 async for block in blocks:
                     size += len(block)
-                    if size > self.MAX_FILE_BYTES:
-                        raise HTTPException(413, "单文件上限 160 MiB")
-                    if name.lower().endswith(".zip"):
+                    if size > (self.MAX_ARCHIVE_BYTES if is_archive else self.MAX_FILE_BYTES):
+                        raise HTTPException(413, "压缩包上限 1 GiB，普通文件上限 160 MiB")
+                    if is_archive or member:
                         out.write(block)
                         continue
                     text = decoder.decode(block)
@@ -78,30 +80,30 @@ class ResearchService:
                     nonempty = nonempty or bool(text.strip())
                     out.write(block)
                 decoder.decode(b"", final=True)
-            if name.lower().endswith(".zip"):
+            if is_archive:
                 members = []
                 try:
                     with zipfile.ZipFile(folder / "content") as archive:
                         entries = [f for f in archive.infolist() if not f.is_dir()]
-                        if not 1 <= len(entries) <= 12 or sum(f.file_size for f in entries) > 2*self.MAX_FILE_BYTES:
-                            raise HTTPException(422, "ZIP 最多包含 12 个文件，解压总量上限 320 MiB")
+                        if not entries:
+                            raise HTTPException(422, "ZIP 中没有文件")
                         for entry in entries:
-                            if Path(entry.filename).suffix.lower() not in {".csv",".txt",".md",".json",".tsv"}:
-                                raise HTTPException(422, "ZIP 中包含不支持的文件类型")
                             async def chunks(stream):
                                 while block := stream.read(262144):
                                     yield block
                             with archive.open(entry) as stream:
-                                members.append(await self.upload_stream(Path(entry.filename).name, chunks(stream)))
+                                item = await self.upload_stream(Path(entry.filename).name, chunks(stream), member=True)
+                                members.append({**item, "archive_path": entry.filename})
                 except Exception as exc:
                     for f in members:
                         shutil.rmtree(folder.parent / f["id"])
                     if isinstance(exc, (zipfile.BadZipFile, RuntimeError, NotImplementedError)):
                         raise HTTPException(422, "ZIP 损坏、加密或压缩格式不受支持") from exc
                     raise
-                shutil.rmtree(folder)
-                return {"name": name, "files": members}
-            if not nonempty:
+                meta = dict(id=key, name=name, size=size)
+                (folder / "meta.json").write_text(json.dumps({**meta,"members":members}), encoding="utf8")
+                return meta
+            if not member and not nonempty:
                 raise HTTPException(422, "文件为空")
             meta = dict(id=key, name=name, size=size)
             (folder / "meta.json").write_text(json.dumps(meta), encoding="utf8")
@@ -119,17 +121,21 @@ class ResearchService:
             raise HTTPException(409, "上一轮研究正在运行，请在结束或停止后继续")
         prior = previous.get("task") if previous else {}
         files = list(prior.get("files", []))
+        attachments = list(prior.get("attachments", files))
         existing_ids = {f["id"] for f in files}
         for key in dict.fromkeys(submission.file_ids):
-            if key in existing_ids:
+            if any(a["id"] == key for a in attachments):
                 continue
             if not re.fullmatch(r"[a-f0-9]{32}", key):
                 raise HTTPException(422, "文件引用无效")
             meta = self.root / "uploads" / key / "meta.json"
             if not meta.exists():
                 raise HTTPException(422, "文件不存在")
-            files.append(json.loads(meta.read_text(encoding="utf8")))
-        if len(files) > 12:
+            item = json.loads(meta.read_text(encoding="utf8"))
+            members = item.pop("members", None)
+            attachments.append(item)
+            files.extend(members or [item])
+        if len(attachments) > 12:
             raise HTTPException(422, "一个研究窗口最多继承并使用 12 个附件")
         registry = Registry(self.root / id)
         material = Task.model_validate(submission.model_dump(include=set(Task.model_fields))).model_dump()
@@ -145,6 +151,8 @@ class ResearchService:
                 source = (previous.root / "inputs" / f["id"] if f["id"] in existing_ids
                           else self.root / "uploads" / f["id"] / "content")
                 shutil.copyfile(source, inputs / f["id"])
+            material["attachments"] = attachments
+            material["native_sources"] = any(Path(f["name"]).suffix.lower() in {".c",".cc",".cpp",".cxx"} for f in files)
             material["files"] = files
             material["favorita_files"] = {"train.csv","test.csv","sample_submission.csv"} <= {f["name"] for f in files}
             material["csv_files"] = any(f["name"].lower().endswith(".csv") for f in files)
@@ -290,6 +298,15 @@ class ResearchService:
             for name, value in (("task.json", registry.get("task")), ("report.json", registry.get("report")),
                                 ("events.json", registry.get("events")), ("model_calls.json", registry.list("model_calls"))):
                 archive.writestr(name, json.dumps(value, ensure_ascii=False, indent=2))
+            native = registry.root / "topk" / "LLM_TopK_Agent_Benchmark"
+            for trial in (native/"results").glob("partition-*.json"):
+                archive.write(trial,"topk/results/"+trial.name)
+            for rel in ("src/candidate.hpp","results/initial.json","results/candidate.json","results/final.json"):
+                if (native / rel).is_file():
+                    archive.write(native / rel, "topk/" + rel)
+            for artifact in (registry.root/"native-result").glob("*"):
+                if artifact.is_file():
+                    archive.write(artifact,"native-result/"+artifact.name)
             archive.writestr("result.md", result_markdown(registry, registry.get("report")))
             for name in ("submission.csv","benchmark.json"):
                 if (registry.root / name).is_file():

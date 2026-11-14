@@ -69,6 +69,8 @@ class ScienceGateway:
                 endpoint.output_limit_field: output_bound}
         if role == "local" and endpoint.base_url.rstrip("/") in {"http://127.0.0.1:11434/v1", "http://localhost:11434/v1"}:
             shape = schema.model_json_schema()
+            if schema.__name__ == "CapabilityPlan":
+                shape["properties"]["tools"]["items"] = {"type":"string","enum":list(context["registry"])}
             if schema.__name__ == "Direction":
                 references = list(context.get("observations", {}))
                 shape["properties"]["evidence"] = ({"type":"array","items":{"type":"string","enum":references}}

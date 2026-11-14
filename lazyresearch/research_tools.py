@@ -54,6 +54,9 @@ def load_tools(path=DEFAULT_CONFIG):
 
 
 def execute_tool(root, payload):
+    if "generated_source" in payload:
+        from .tools.generated import evaluate
+        return {"verdict":"observed","value":evaluate(payload["generated_source"],payload["arguments"]["inputs"])}
     tool = Tool.model_validate(payload["tool_spec"])
     schema, execute = tool.resolve()
     return execute(root, payload["task"], schema.model_validate(payload["arguments"]))

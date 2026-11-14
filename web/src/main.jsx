@@ -51,7 +51,7 @@ function App() {
   const usageLimits=data?.task.budget || budget
   const terminal=data && !['queued','running'].includes(data.status)
   const draft = data ? drafts[phase || 'conversation'] || '' : goal
-  const inheritedCount = data?.task.files?.length || 0
+  const inheritedCount = (data?.task.attachments ?? data?.task.files)?.length || 0
   const fileCount = inheritedCount + files.length
   const canResearch = !!config && (!run || terminal) && !busy && !sending && !!draft.trim() &&
     draft.length <= 3000 && fileCount <= 12 && files.every(file=>file.id)
@@ -90,9 +90,9 @@ function App() {
     setFiles(old=>[...old,...batch])
     await Promise.all(batch.map(async entry=>{
       try {
-        if(entry.file.size>(config?.max_file_bytes ?? 2000000))throw new Error('超过服务端文件大小上限')
+        if(entry.file.size>(entry.name.toLowerCase().endsWith('.zip') ? config.max_archive_bytes : config.max_file_bytes))throw new Error('超过服务端文件大小上限')
         const meta=await request('/research/files?name='+encodeURIComponent(entry.name),{method:'POST',body:entry.file})
-        setFiles(old=>old.flatMap(f=>f.key===entry.key?(meta.files || [meta]).map(item=>({...item,key:item.id,status:'已上传'})):[f]))
+        setFiles(old=>old.map(f=>f.key===entry.key?{...meta,key:meta.id,status:'已上传'}:f))
       }catch(e){setError(entry.name+" 上传失败："+e.message);setFiles(old=>old.map(f=>f.key===entry.key?{...f,status:e.message}:f))}
     }))
   }
@@ -164,7 +164,7 @@ function App() {
       </section>
       <aside className="right-column"><section className="panel progress-panel files-panel"><div className="right-heading"><i className="pixel-icon icon-folder"/><h2>工作文件</h2></div><div className="files-scroll">
         <div className="file-section"><h3>运行状态</h3><p>{statusLabels[data?.status]||'等待启动'}</p></div>
-        {data?.task.files?.map(f=><div className="file-row" key={f.id}><i className="pixel-icon icon-folder"/>{f.name}</div>)}
+        {(data?.task.attachments ?? data?.task.files)?.map(f=><div className="file-row" key={f.id}><i className="pixel-icon icon-folder"/>{f.name}</div>)}
         <div className="file-section"><h3>验证记录</h3>{events.filter(e=>e.stage==='validation'&&e.outcome).map(e=><button className="file-row evidence-row" key={e.id} onClick={()=>open('validation',e.round,e.id)}><strong>{e.display.title}</strong><small>{e.display.summary}{e.display.fields.length>0&&' · '+e.display.fields.slice(0,2).map(({label,value})=>label+' '+value).join(' · ')}</small></button>)}</div>
         {run&&<a className="file-row" target="_blank" rel="noreferrer" href={'/research/runs/'+run+'/report'}>实时运行报告 ↗</a>}{terminal&&<a className="file-row" href={'/research/runs/'+run+'/result.md'}>研究结果.md ↓</a>}{terminal&&<a className="file-row" href={'/research/runs/'+run+'/artifacts'}>下载研究包.zip ↓</a>}
       </div></section>

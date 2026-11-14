@@ -86,3 +86,26 @@ purpose = "在验证集上将候选分类器与逻辑回归基线比较。"
 module = "table"
 schema = "Tabular"
 function = "tabular"
+
+[tools.register_tool]
+material = "any_task"
+label = "编写并验证研究工具"
+purpose = "Create a task-local pure JavaScript function expression (one object input, JSON result). Supply name custom_..., purpose including input keys, example and expected. After registration invoke it by name. No host APIs."
+module = "generated"
+schema = "Definition"
+function = "register"
+
+[tools.native_trial]
+material = "native_sources"
+label = "编译并测试 C/C++ 实验"
+purpose = "Compile selected attached translation units by file ID; optionally replace one authorized source/header in the trial copy. Run executable with arguments in the isolated GCC container; inspect exit code and timing output."
+module = "native"
+schema = "NativeTrial"
+function = "native_trial"
+[tools.topk_benchmark]
+material = "reviewed_topk"
+label = "Top-K C++ 正确性与性能回测"
+purpose = "Run the reviewed LLM Top-K C++ starter with GCC: baseline dev, bounded-heap candidate dev, locked eval, nine repeats. No arguments."
+module = "topk"
+schema = "BenchmarkArgs"
+function = "benchmark"
