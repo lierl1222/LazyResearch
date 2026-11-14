@@ -1,0 +1,1 @@
+{"goal":"Find an integer polynomial matching the supplied sequence. Report its tested range and a counterexample to at least one competing hypothesis.","sequence":[1,2,5,10,17,26],"budget":{"max_llm_calls":12,"max_llm_input_tokens":60000,"max_llm_output_tokens":8000}}

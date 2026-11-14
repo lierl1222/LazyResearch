@@ -7,7 +7,6 @@ import httpx
 from pydantic import Field
 
 from ..models import Record
-from .agents import HypothesisSpec
 
 
 class ResearchPlan(Record):
@@ -25,9 +24,10 @@ class UserStopped(RuntimeError):
 
 
 class ScienceGateway:
-    def __init__(self, config, registry, budget, transport=None):
+    def __init__(self, config, registry, budget, transport=None, *, allow_reporting=False):
         self.config, self.registry, self.budget = config, registry, budget
         self.transport = transport
+        self.allow_reporting = allow_reporting
 
     def ask(self, role, id, instruction, context, schema):
         cached = self.registry.get("model_calls", id)
@@ -51,7 +51,7 @@ class ScienceGateway:
                 return (inputs * endpoint.input_price_per_million + outputs * endpoint.output_price_per_million) / 1_000_000
             return None
         reserved_cost = cost(input_bound, output_bound)
-        self.budget.reserve_llm(id, input_bound, output_bound, cost_usd=reserved_cost)
+        self.budget.reserve_llm(id, input_bound, output_bound, cost_usd=reserved_cost, allow_reporting=self.allow_reporting)
         self.registry.put("model_calls", {"id": id, "role": role, "status": "reserved"}, id)
         key = endpoint.api_key.get_secret_value().strip() or os.environ.get(endpoint.api_key_env, "").strip()
         headers = {"X-Client-Request-Id": id}

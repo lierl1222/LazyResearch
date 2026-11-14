@@ -202,3 +202,17 @@ flowchart TD
 ## 编排参考
 
 参考 [agentic-rag-for-dummies @ c1b339b](https://github.com/GiovanniPasq/agentic-rag-for-dummies/tree/c1b339b54f0927bd0b469fcce70f3cd5de4e918d/project/rag_agent) 的主图和子图分工、条件边与 `Send` 聚合。参考源码通过独立的稀疏检出对照。LazyResearch 用结构化证据连接阶段，并使用本地报告节点在预算耗尽时收尾。
+
+### 通用研究控制器
+
+从仓库根目录运行以下命令。使用项目的 Python 环境，并在 models.toml 中启用一个或两个兼容 chat completions 的端点。输出上限需足以容纳完整的 JSON 决策。
+
+```powershell
+.\.venv\Scripts\python.exe -m lazyresearch research --task configs/research-sequence.json --model-config models.toml
+```
+
+任务 JSON 中 goal 为研究目标。sequence 提供从下标 0 开始的整数观测，cpu_benchmark 启用 CPU 成员查询基准，tabular_config 指向现有表格研究 YAML（相对任务文件解析）。可以同时提供多种材料。budget 接受现有科学研究预算字段。单端点负责全部推理；双端点默认由本地模型处理常规委派，复杂委派或无效执行后的诊断优先请求云端。模型调用和实验共用预算账本。
+
+主模型决定委派目标、推理难度和停止时机。子模型选择工具、预测结果，并读取程序给出的验证结果，自行修订或汇报。数列实验检查给定范围，CPU 实验同时验证正确性和计时，表格实验在固定验证集上与基线比较。报告中的 reported 表示模型已提交引用有效观测的结论；具体支持范围以引用的验证记录为准。
+
+运行结束时打印 report.json 路径。该目录中的 registry.sqlite 保存任务、模型决策、执行记录及预算，workers 目录保存独立进程的原始结果。每次启动使用新目录。

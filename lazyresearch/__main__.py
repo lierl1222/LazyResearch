@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .configuration import load_model_config
@@ -7,6 +8,9 @@ from .models import ResearchTask
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["research"]:
+        from .research import main as run_research
+        return run_research(sys.argv[2:])
     parser = argparse.ArgumentParser(description="运行 LazyResearch 研究闭环")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--goal")

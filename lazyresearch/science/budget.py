@@ -38,14 +38,14 @@ class BudgetGovernor:
     def remaining_time(self):
         return max(0, self.limits.max_wall_time_seconds - self.snapshot()["wall_seconds"])
 
-    def _check_time(self, snapshot):
+    def _check_time(self, snapshot, *, allow_reporting=False):
         if (self.registry.root / "stop.requested").exists():
             raise BudgetExceeded("user_stop")
         if snapshot["wall_seconds"] >= self.limits.max_wall_time_seconds:
             raise BudgetExceeded("wall_time_budget")
-        if snapshot["cpu_seconds"] >= self.limits.max_cpu_seconds:
+        if not allow_reporting and snapshot["cpu_seconds"] >= self.limits.max_cpu_seconds:
             raise BudgetExceeded("cpu_budget")
-        if snapshot["experiment_count"] >= self.limits.max_experiments:
+        if not allow_reporting and snapshot["experiment_count"] >= self.limits.max_experiments:
             raise BudgetExceeded("experiment_budget")
         if self.enforce_llm_limits:
             if snapshot["llm_calls"] >= self.limits.max_llm_calls:
@@ -86,7 +86,7 @@ class BudgetGovernor:
             op.update(status="settled", cpu_status="measured" if cpu_seconds is not None else "reserved_unknown")
             self.registry.put_into(db, "budget", "current", ledger)
 
-    def reserve_llm(self, id, input_tokens, output_tokens, cost_usd=None):
+    def reserve_llm(self, id, input_tokens, output_tokens, cost_usd=None, *, allow_reporting=False):
         if input_tokens < 0 or output_tokens < 0:
             raise ValueError("Negative token reservation")
         with self.registry.transaction() as db:
@@ -94,7 +94,7 @@ class BudgetGovernor:
             if id in ledger["operations"]:
                 raise BudgetExceeded("operation_already_reserved")
             s = self._snapshot(ledger)
-            self._check_time(s)
+            self._check_time(s, allow_reporting=allow_reporting)
             if s["llm_calls"] >= self.limits.max_llm_calls:
                 raise BudgetExceeded("llm_call_budget")
             if s["input_tokens"] + input_tokens > self.limits.max_llm_input_tokens or s["output_tokens"] + output_tokens > self.limits.max_llm_output_tokens:
